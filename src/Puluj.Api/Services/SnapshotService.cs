@@ -25,7 +25,11 @@ public sealed class SnapshotService(IDbContextFactory<PulujDbContext> factory, D
             .Where(a => a.EndedAt == null)
             .OrderBy(a => a.StartedAt)
             .ToListAsync(ct);
-        return new SnapshotDto(now, false, tracks.Select(mapper.Track).ToList(), alerts.Select(mapper.Alert).ToList());
+        var ids = tracks.Select(t => t.ThreatTrackId).ToList();
+        var sources = await SourceIdsAsync(db, ids, null, ct);
+        var fixes = await FixesAsync(db, ids, null, ct);
+        var messages = await MessageIdsAsync(db, ids, null, ct);
+        return new SnapshotDto(now, false, tracks.Select(t => mapper.Track(t, sources.GetValueOrDefault(t.ThreatTrackId, []), fixes.GetValueOrDefault(t.ThreatTrackId), messages.GetValueOrDefault(t.ThreatTrackId))).ToList(), alerts.Select(mapper.Alert).ToList());
     }
 
     public async Task<SnapshotDto> AtAsync(DateTimeOffset at, bool activeOnly, CancellationToken ct)
@@ -44,17 +48,15 @@ public sealed class SnapshotService(IDbContextFactory<PulujDbContext> factory, D
             .ToListAsync(ct);
         var visible = revisions.Where(r => !activeOnly || r.Status == TrackStatus.Active).ToList();
         var trackIds = visible.Select(r => r.ThreatTrackId).ToList();
-        var sourceCounts = await db.ThreatTrackObservations
-            .Where(l => trackIds.Contains(l.ThreatTrackId) && l.Observation!.ObservedAt <= at)
-            .GroupBy(l => l.ThreatTrackId)
-            .Select(g => new { TrackId = g.Key, Count = g.Select(l => l.Observation!.SourceId).Distinct().Count() })
-            .ToDictionaryAsync(x => x.TrackId, x => x.Count, ct);
+        var sources = await SourceIdsAsync(db, trackIds, at, ct);
+        var fixes = await FixesAsync(db, trackIds, at, ct);
+        var messages = await MessageIdsAsync(db, trackIds, at, ct);
         var alerts = await db.AirAlerts.AsNoTracking()
             .Where(a => a.StartedAt <= at && (a.EndedAt == null || a.EndedAt > at))
             .OrderBy(a => a.StartedAt)
             .ToListAsync(ct);
         return new SnapshotDto(at, true,
-            visible.OrderByDescending(r => r.LastSeenAt).Select(r => mapper.Track(r, sourceCounts.GetValueOrDefault(r.ThreatTrackId, 1))).ToList(),
+            visible.OrderByDescending(r => r.LastSeenAt).Select(r => mapper.Track(r, sources.GetValueOrDefault(r.ThreatTrackId, []), fixes.GetValueOrDefault(r.ThreatTrackId), messages.GetValueOrDefault(r.ThreatTrackId))).ToList(),
             alerts.Select(mapper.Alert).ToList());
     }
 
@@ -62,7 +64,76 @@ public sealed class SnapshotService(IDbContextFactory<PulujDbContext> factory, D
     {
         await using var db = await factory.CreateDbContextAsync(ct);
         var t = await db.ThreatTracks.AsNoTracking().FirstOrDefaultAsync(x => x.ThreatTrackId == id, ct);
-        return t is null ? null : mapper.Track(t);
+        return t is null ? null : mapper.Track(t, (await SourceIdsAsync(db, [id], null, ct)).GetValueOrDefault(id, []), (await FixesAsync(db, [id], null, ct)).GetValueOrDefault(id), (await MessageIdsAsync(db, [id], null, ct)).GetValueOrDefault(id));
+    }
+
+    /// <summary>How many of the newest raw messages travel with a track (for "neighbours by message").</summary>
+    private const int MaxMessages = 6;
+
+    private static async Task<Dictionary<long, List<long>>> MessageIdsAsync(PulujDbContext db, List<long> trackIds, DateTimeOffset? at, CancellationToken ct)
+    {
+        if (trackIds.Count == 0)
+        {
+            return [];
+        }
+        var rows = await db.ThreatTrackObservations.AsNoTracking()
+            .Where(l => trackIds.Contains(l.ThreatTrackId) && (at == null || l.Observation!.ObservedAt <= at))
+            .Select(l => new { l.ThreatTrackId, l.Observation!.RawMessageId, l.Observation.ObservedAt })
+            .ToListAsync(ct);
+        return rows.GroupBy(r => r.ThreatTrackId)
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(r => r.ObservedAt).Select(r => r.RawMessageId).Distinct().Take(MaxMessages).ToList());
+    }
+
+    /// <summary>How many earlier positions travel with a track (the current one included).</summary>
+    private const int MaxFixes = 4;
+
+    /// <summary>The last MaxFixes distinct reported positions of a track, oldest first; repeats of the same place collapse.</summary>
+    private List<FixDto> Fixes(IEnumerable<Observation> observations)
+    {
+        var fixes = new List<FixDto>();
+        foreach (var o in observations.Where(o => o.DuplicateOfObservationId == null && o.EventType == EventType.ThreatObserved).OrderBy(o => o.ObservedAt))
+        {
+            var fix = mapper.Fix(o);
+            if (fix is null)
+            {
+                continue;
+            }
+            if (fixes.Count > 0 && fixes[^1].PlaceName == fix.PlaceName && fixes[^1].Approach == fix.Approach)
+            {
+                fixes[^1] = fix; // the same place again: keep the newer time
+                continue;
+            }
+            fixes.Add(fix);
+        }
+        return fixes.Count > MaxFixes ? fixes.GetRange(fixes.Count - MaxFixes, MaxFixes) : fixes;
+    }
+
+    private async Task<Dictionary<long, List<FixDto>>> FixesAsync(PulujDbContext db, List<long> trackIds, DateTimeOffset? at, CancellationToken ct)
+    {
+        if (trackIds.Count == 0)
+        {
+            return [];
+        }
+        var rows = await db.ThreatTrackObservations.AsNoTracking()
+            .Where(l => trackIds.Contains(l.ThreatTrackId) && (at == null || l.Observation!.ObservedAt <= at))
+            .Select(l => new { l.ThreatTrackId, Observation = l.Observation! })
+            .ToListAsync(ct);
+        return rows.GroupBy(r => r.ThreatTrackId).ToDictionary(g => g.Key, g => Fixes(g.Select(r => r.Observation)));
+    }
+
+    /// <summary>Distinct sources behind each track (optionally as of an instant), for the per-source filter and the badge.</summary>
+    private static async Task<Dictionary<long, int[]>> SourceIdsAsync(PulujDbContext db, List<long> trackIds, DateTimeOffset? at, CancellationToken ct)
+    {
+        if (trackIds.Count == 0)
+        {
+            return [];
+        }
+        var rows = await db.ThreatTrackObservations.AsNoTracking()
+            .Where(l => trackIds.Contains(l.ThreatTrackId) && (at == null || l.Observation!.ObservedAt <= at))
+            .Select(l => new { l.ThreatTrackId, l.Observation!.SourceId })
+            .Distinct()
+            .ToListAsync(ct);
+        return rows.GroupBy(r => r.ThreatTrackId).ToDictionary(g => g.Key, g => g.Select(r => r.SourceId).OrderBy(x => x).ToArray());
     }
 
     public async Task<TrackDetailsDto?> TrackDetailsAsync(long id, CancellationToken ct)
@@ -78,7 +149,9 @@ public sealed class SnapshotService(IDbContextFactory<PulujDbContext> factory, D
             .Include(l => l.Observation!).ThenInclude(o => o.RawMessage)
             .OrderBy(l => l.Observation!.ObservedAt).ThenBy(l => l.ObservationId)
             .ToListAsync(ct);
-        return new TrackDetailsDto(mapper.Track(t), links.Select(l => mapper.Observation(l.Observation!, l.AssociationConfidence)).ToList());
+        var sourceIds = links.Select(l => l.Observation!.SourceId).Distinct().OrderBy(x => x).ToArray();
+        var messageIds = links.OrderByDescending(l => l.Observation!.ObservedAt).Select(l => l.Observation!.RawMessageId).Distinct().Take(MaxMessages).ToList();
+        return new TrackDetailsDto(mapper.Track(t, sourceIds, Fixes(links.Select(l => l.Observation!)), messageIds), links.Select(l => mapper.Observation(l.Observation!, l.AssociationConfidence, id)).ToList());
     }
 
     /// <summary>Newest observations first (feed panel). Duplicates are kept — they are provenance too.</summary>
@@ -91,14 +164,47 @@ public sealed class SnapshotService(IDbContextFactory<PulujDbContext> factory, D
             .OrderByDescending(o => o.ObservedAt).ThenByDescending(o => o.ObservationId)
             .Take(Math.Clamp(limit, 1, 5000))
             .ToListAsync(ct);
-        return rows.Select(o => mapper.Observation(o, null)).ToList();
+        var trackOf = await TrackOfAsync(db, rows.Select(o => o.ObservationId).ToList(), ct);
+        return rows.Select(o => mapper.Observation(o, null, trackOf.TryGetValue(o.ObservationId, out var t) ? t : null)).ToList();
+    }
+
+    /// <summary>Which track each observation belongs to (the feed highlights the lines behind the selected target).</summary>
+    private static async Task<Dictionary<long, long>> TrackOfAsync(PulujDbContext db, List<long> observationIds, CancellationToken ct)
+    {
+        if (observationIds.Count == 0)
+        {
+            return [];
+        }
+        return await db.ThreatTrackObservations.AsNoTracking()
+            .Where(l => observationIds.Contains(l.ObservationId))
+            .GroupBy(l => l.ObservationId)
+            .Select(g => new { g.Key, TrackId = g.Min(l => l.ThreatTrackId) })
+            .ToDictionaryAsync(x => x.Key, x => x.TrackId, ct);
+    }
+
+    /// <summary>Alerts of a place over the last `hours`, ended ones included, newest first: the region window's history.</summary>
+    public async Task<IReadOnlyList<AlertDto>> AlertHistoryAsync(int placeId, double hours, CancellationToken ct)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var since = clock.GetUtcNow().AddHours(-Math.Clamp(hours, 1, 24 * 14));
+        var rows = await db.AirAlerts.AsNoTracking()
+            .Where(a => a.PlaceId == placeId && (a.EndedAt == null || a.EndedAt >= since))
+            .OrderByDescending(a => a.StartedAt)
+            .Take(200)
+            .ToListAsync(ct);
+        return rows.Select(mapper.Alert).ToList();
     }
 
     public async Task<ObservationDto?> ObservationAsync(long id, CancellationToken ct)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
         var o = await db.Observations.AsNoTracking().Include(x => x.RawMessage).FirstOrDefaultAsync(x => x.ObservationId == id, ct);
-        return o is null ? null : mapper.Observation(o, null);
+        if (o is null)
+        {
+            return null;
+        }
+        var trackOf = await TrackOfAsync(db, [id], ct);
+        return mapper.Observation(o, null, trackOf.TryGetValue(id, out var t) ? t : null);
     }
 
     public async Task<AlertDto?> AlertAsync(long id, CancellationToken ct)

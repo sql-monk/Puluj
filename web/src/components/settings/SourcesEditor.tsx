@@ -16,11 +16,14 @@ export default function SourcesEditor({ sources, reload, notify }: Props) {
   const [editing, setEditing] = useState<number | null>(null)
   const [form, setForm] = useState<SourcePatch>({})
   const [adding, setAdding] = useState(false)
+  // Token is sent only when typed: an untouched field keeps the stored one.
+  const [tokenDraft, setTokenDraft] = useState('')
   const [add, setAdd] = useState({ type: 'Telegram', channel: '', name: '', url: '', trustLevel: '0.6', priority: '50', polling: '' })
 
   const startEdit = (s: AdminSourceDto) => {
     setEditing(s.id)
     setForm({ name: s.name, channel: s.channel ?? '', url: s.url ?? '', trustLevel: s.trustLevel, priority: s.priority, pollingIntervalSeconds: s.pollingIntervalSeconds ?? 0, homeRegion: s.homeRegion ?? '' })
+    setTokenDraft('')
   }
 
   const run = async (fn: () => Promise<unknown>, okText?: string) => {
@@ -33,7 +36,7 @@ export default function SourcesEditor({ sources, reload, notify }: Props) {
     }
   }
 
-  const saveEdit = () => run(() => admin.updateSource(editing!, form), 'Джерело оновлено').then(() => setEditing(null))
+  const saveEdit = () => run(() => admin.updateSource(editing!, tokenDraft ? { ...form, token: tokenDraft } : form), 'Джерело оновлено').then(() => setEditing(null))
 
   const create = () =>
     run(
@@ -69,6 +72,7 @@ export default function SourcesEditor({ sources, reload, notify }: Props) {
     >
       <p className="text-xs text-slate-500">
         Довіра (0–1) обмежує максимальну впевненість фактів із джерела; пріоритет впливає лише на порядок. Джерело, в якого вже є збережені повідомлення, можна тільки вимкнути — воно частина ланцюжка походження.
+        Усе, включно з токенами API, зберігається в базі; <code>data/sources.json</code> лише додає джерела, яких ще немає.
       </p>
 
       {adding && (
@@ -166,6 +170,17 @@ export default function SourcesEditor({ sources, reload, notify }: Props) {
                         <span className="block text-slate-500">Домашній регіон (для ОВА: «Київська область»)</span>
                         <input className={input} value={form.homeRegion ?? ''} onChange={(e) => setForm({ ...form, homeRegion: e.target.value })} />
                       </label>
+                      {s.type !== 'Telegram' && (
+                        <label>
+                          <span className="block text-slate-500">Токен API {s.hasToken ? '(збережено — введіть, щоб замінити)' : '(не задано)'}</span>
+                          <input className={input} type="password" autoComplete="off" value={tokenDraft} onChange={(e) => setTokenDraft(e.target.value)} placeholder={s.hasToken ? '••••••••' : ''} />
+                          {s.hasToken && (
+                            <button className="mt-1 text-[11px] text-red-600 underline" onClick={() => void run(() => admin.updateSource(s.id, { token: '' }), 'Токен видалено')}>
+                              прибрати токен
+                            </button>
+                          )}
+                        </label>
+                      )}
                     </div>
                     <div className="mt-2 flex gap-2">
                       <button className="rounded bg-slate-800 px-3 py-1 text-white dark:bg-slate-100 dark:text-slate-900" onClick={() => void saveEdit()}>
@@ -184,6 +199,7 @@ export default function SourcesEditor({ sources, reload, notify }: Props) {
                     <div className="text-slate-400">
                       {s.channel ? `@${s.channel}` : (s.url ?? s.code)}
                       {s.homeRegion && ` · ${s.homeRegion}`}
+                      {s.type !== 'Telegram' && (s.hasToken ? ' · токен ✓' : ' · без токена')}
                     </div>
                   </td>
                   <td className="pr-2">{typeLabel[s.type] ?? s.type}</td>

@@ -6,13 +6,12 @@ import FilterPanel from './components/FilterPanel'
 import KyivPanel from './components/KyivPanel'
 import ReplayBar from './components/ReplayBar'
 import TopBar, { type Page } from './components/TopBar'
-import TrackCard from './components/TrackCard'
 import TrackDetailsDrawer from './components/TrackDetailsDrawer'
 import SettingsPage from './components/settings/SettingsPage'
 import { admin } from './api/admin'
 import KyivMapView from './map/KyivMapView'
 import MapView from './map/MapView'
-import { useStore } from './store/useStore'
+import { themeIsDark, themeMapIsDark, useStore } from './store/useStore'
 
 const TICK_MS = 15_000
 
@@ -22,30 +21,25 @@ export default function App() {
   const at = useStore((s) => s.at)
   const selectedTrackId = useStore((s) => s.selectedTrackId)
   const selectedTrack = useStore((s) => (s.selectedTrackId ? s.tracks[s.selectedTrackId] : undefined))
-  const select = useStore((s) => s.select)
   const setHome = useStore((s) => s.setHome)
-  const [menuOpen, setMenuOpen] = useState(false)
+  const panelOpen = useStore((s) => s.panelOpen)
+  const setPanelOpen = useStore((s) => s.setPanelOpen)
   const [feedOpen, setFeedOpen] = useState(() => window.innerWidth >= 1024)
   const [replay, setReplay] = useState(false)
   const [picking, setPicking] = useState(false)
-  const [detailsId, setDetailsId] = useState<number | null>(null)
+  // The details panel (left) shows whichever track is selected on the map, as long as it is open.
+  const [detailsOpen, setDetailsOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(() => window.location.hash === '#/settings')
   const [page, setPage] = useState<Page>(() => (window.location.hash === '#/kyiv' ? 'kyiv' : 'ukraine'))
   const regionsLoaded = useStore((s) => s.regions.length > 0)
   const [setupHint, setSetupHint] = useState(false)
-  const [systemDark, setSystemDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
-  const dark = theme === 'dark' || (theme === 'system' && systemDark)
-
-  useEffect(() => {
-    const mq = window.matchMedia('(prefers-color-scheme: dark)')
-    const handler = (e: MediaQueryListEvent) => setSystemDark(e.matches)
-    mq.addEventListener('change', handler)
-    return () => mq.removeEventListener('change', handler)
-  }, [])
+  const dark = themeIsDark(theme)
+  const mapDark = themeMapIsDark(theme)
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark)
-  }, [dark])
+    document.documentElement.dataset.theme = theme
+  }, [dark, theme])
 
   // Fade / ETA depend on wall time: re-render every 15 s.
   useEffect(() => {
@@ -95,12 +89,16 @@ export default function App() {
       .catch(() => setSetupHint(false))
   }, [settingsOpen])
 
-  // Region polygons (alerts, region-level markers) are loaded once.
+  // Region polygons (alerts, region-level markers) and the source list (per-source filter) are loaded once.
   useEffect(() => {
     api
       .regions()
       .then((r) => useStore.getState().setRegions(r))
       .catch((e: Error) => useStore.getState().setError(`Регіони: ${e.message}`))
+    api
+      .sources()
+      .then((s) => useStore.getState().setSources(s))
+      .catch((e: Error) => useStore.getState().setError(`Джерела: ${e.message}`))
   }, [])
 
   // Snapshot requests can overlap while the timeline slider moves; only the latest one may land in the store.
@@ -153,21 +151,31 @@ export default function App() {
     : null
 
   return (
-    <div className="relative h-full w-full overflow-hidden bg-slate-100 dark:bg-slate-950">
-      {page === 'kyiv' ? <KyivMapView dark={dark} /> : <MapView dark={dark} onPickHome={pickHome} />}
-      <TopBar page={page} onPage={goPage} onToggleMenu={() => setMenuOpen((o) => !o)} onOpenSettings={openSettings} onReplay={toggleReplay} replay={replay} setupHint={setupHint} />
-      {page === 'kyiv' ? <KyivPanel open={menuOpen} /> : <FilterPanel open={menuOpen} picking={picking} onPickingChange={setPicking} onReplay={() => !replay && toggleReplay()} />}
+    <div className="relative h-full w-full overflow-hidden bg-slate-100 dark:bg-slate-950" data-feed={feedOpen && !settingsOpen ? 'open' : 'closed'}>
+      {page === 'kyiv' ? <KyivMapView dark={mapDark} theme={theme} onDetails={() => setDetailsOpen(true)} /> : <MapView dark={mapDark} theme={theme} onPickHome={pickHome} onDetails={() => setDetailsOpen(true)} />}
+      <TopBar page={page} onPage={goPage} menuOpen={panelOpen} onToggleMenu={() => setPanelOpen(!panelOpen)} onOpenSettings={openSettings} onReplay={toggleReplay} replay={replay} setupHint={setupHint} />
+      {page === 'kyiv' ? (
+        <KyivPanel open={panelOpen} onClose={() => setPanelOpen(false)} />
+      ) : (
+        <FilterPanel open={panelOpen} onClose={() => setPanelOpen(false)} picking={picking} onPickingChange={setPicking} onReplay={() => !replay && toggleReplay()} />
+      )}
+      {!panelOpen && !settingsOpen && !detailsOpen && (
+        <button
+          className="pointer-events-auto absolute left-3 top-14 z-10 hidden rounded-lg bg-white/95 px-3 py-1.5 text-sm shadow md:block dark:bg-slate-900/95 dark:text-slate-100"
+          onClick={() => setPanelOpen(true)}
+          title="Показати панель фільтрів"
+        >
+          ☰ Фільтри
+        </button>
+      )}
       {replay && !settingsOpen && <ReplayBar onClose={toggleReplay} />}
       {!settingsOpen && <FeedPanel open={feedOpen} onToggle={() => setFeedOpen((o) => !o)} />}
-      {selectedTrack && !detailsId && (
-        <TrackCard track={selectedTrack} onDetails={() => setDetailsId(selectedTrack.id)} onClose={() => select(null)} />
-      )}
-      {detailsId && <TrackDetailsDrawer trackId={detailsId} onClose={() => setDetailsId(null)} />}
+      {detailsOpen && !settingsOpen && <TrackDetailsDrawer onClose={() => setDetailsOpen(false)} />}
       {settingsOpen && <SettingsPage onClose={closeSettings} />}
-      {selectedTrackId && !selectedTrack && !detailsId && (
+      {selectedTrackId && !selectedTrack && !detailsOpen && (
         <div className="pointer-events-auto absolute bottom-3 left-1/2 z-20 -translate-x-1/2 rounded bg-white/90 px-3 py-1 text-xs shadow dark:bg-slate-900/90 dark:text-slate-100">
           Трек більше не відображається.{' '}
-          <button className="underline" onClick={() => setDetailsId(selectedTrackId)}>
+          <button className="underline" onClick={() => setDetailsOpen(true)}>
             Деталі
           </button>
         </div>

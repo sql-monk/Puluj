@@ -44,6 +44,17 @@ export interface DirectionDto {
   confidence: Confidence
 }
 
+/** One earlier reported position of a track: the crumbs drawn behind the marker. */
+export interface FixDto {
+  at: string
+  placeName?: string
+  kind: LocationKind
+  point: Point
+  accuracyKm?: number
+  /** The report only named a destination: the object was on its way to this place. */
+  approach: boolean
+}
+
 export interface TrackDto {
   id: number
   status: TrackStatus
@@ -60,6 +71,12 @@ export interface TrackDto {
   objectCount?: number
   observationCount: number
   distinctSourceCount: number
+  /** Ids of the sources whose observations make up the track (feeds the per-source filter and the badge). */
+  sourceIds: number[]
+  /** The last few distinct reported positions, oldest first, the current one last. */
+  fixes: FixDto[]
+  /** Raw messages behind the newest observations: tracks sharing one are neighbours by message. */
+  messageIds: number[]
 }
 
 export type AlertLevel = 'Unknown' | 'Yellow' | 'Red'
@@ -123,6 +140,8 @@ export interface ObservationDto {
   associationConfidence?: number
   source: SourceDto
   rawMessage: RawMessageDto
+  /** Track the observation was attached to (feed highlighting), if any. */
+  trackId?: number
 }
 
 export interface TrackDetailsDto {

@@ -2,13 +2,14 @@ using NetTopologySuite.Geometries;
 using Puluj.Domain.Entities;
 using Puluj.Domain.Enums;
 using Puluj.Infrastructure.Persistence;
+using Puluj.Processing.Indexes;
 
 namespace Puluj.Processing.Correlation;
 
 /// <summary>Applies an observation to a track and produces the append-only revision (spec §20). Pure functions over entities.</summary>
 public static class TrackUpdater
 {
-    public static ThreatTrack CreateTrack(Observation o, DateTimeOffset now)
+    public static ThreatTrack CreateTrack(Observation o, DateTimeOffset now, PlaceEntry? destination = null, double? approachBearing = null)
     {
         var t = new ThreatTrack
         {
@@ -19,7 +20,7 @@ public static class TrackUpdater
             UpdatedAt = o.ObservedAt,
             DirectionKind = DirectionKind.Unknown,
         };
-        Apply(t, o, now, isNewer: true);
+        Apply(t, o, now, isNewer: true, destination, approachBearing);
         return t;
     }
 
@@ -27,7 +28,9 @@ public static class TrackUpdater
     /// Merges the observation into the track. Older observations (out-of-order delivery) add provenance but do not move the marker.
     /// UpdatedAt is event time (never earlier than before), so revisions replay the situation as it unfolded, not as it was processed.
     /// </summary>
-    public static void Apply(ThreatTrack t, Observation o, DateTimeOffset now, bool isNewer)
+    /// <param name="destination">The place the observation says the object is heading to, when it names one.</param>
+    /// <param name="approachBearing">Course from the hostile side towards that destination (GazetteerIndex.ApproachBearingTo), when known.</param>
+    public static void Apply(ThreatTrack t, Observation o, DateTimeOffset now, bool isNewer, PlaceEntry? destination = null, double? approachBearing = null)
     {
         t.ObservationCount++;
         if (o.ObservedAt > t.UpdatedAt)
@@ -70,32 +73,38 @@ public static class TrackUpdater
         if (o.Location is not null && !locatedAtOrigin)
         {
             var previous = t.LastLocation;
+            // An approach-zone anchor ("на Конотоп") is not a fix: the path never starts or passes there.
+            var previousIsFix = previous is not null && t.LastLocationKind != LocationKind.DirectionOnly;
             var previousAccuracy = t.LastLocationAccuracyKm ?? 0;
             var accuracy = o.LocationAccuracyKm ?? 0;
             var dist = previous is null ? 0 : Geo.DistanceKm(previous.Centroid.Coordinate, o.Location.Centroid.Coordinate);
-            // A step between two coarse positions goes on the path when it is larger than the areas themselves
-            // (adjacent oblasts qualify); it yields a direction only when it exceeds both uncertainties combined,
-            // because a bearing between two area centres is otherwise noise.
-            var stepped = previous is not null && dist > 20 && dist > 0.5 * (previousAccuracy + accuracy);
-            var moved = stepped && dist > previousAccuracy + accuracy;
+            // Two coarse positions only prove a move when their areas do not overlap: a bearing between the centres of
+            // two adjacent oblasts is noise, and a line between them is not a route anyone flew.
+            var moved = previousIsFix && dist > 20 && dist > previousAccuracy + accuracy;
+            // A coarse previous position seeds the line only when the move away from it is real.
+            var previousOnPath = previousIsFix && (previousAccuracy <= PathPointKm || moved);
             t.LastLocation = o.Location;
             t.LastLocationKind = o.LocationKind;
             t.LastLocationPlaceId = o.LocationPlaceId;
             t.LastLocationAccuracyKm = o.LocationAccuracyKm;
             // The observed path is made of facts: precise positions, or coarse ones only when the move itself is real.
-            if (accuracy <= PathPointKm || stepped)
+            if (accuracy <= PathPointKm || moved)
             {
-                AppendToGeometry(t, previous?.Centroid, o.Location.Centroid);
+                AppendToGeometry(t, previousOnPath ? previous!.Centroid : null, o.Location.Centroid);
             }
 
             // Real movement between located observations gives a direction when the source reported none;
             // it never overrides a direction the source stated.
-            if (o.DirectionDeg is null && moved && previous is not null && (t.DirectionDeg is null || t.DirectionConfidence <= ConfidenceLevel.Low))
+            if (o.DirectionDeg is null && moved && (t.DirectionDeg is null || t.DirectionConfidence <= ConfidenceLevel.Low))
             {
-                t.DirectionDeg = Geo.BearingDeg(previous.Centroid.Coordinate, o.Location.Centroid.Coordinate);
+                t.DirectionDeg = Geo.BearingDeg(previous!.Centroid.Coordinate, o.Location.Centroid.Coordinate);
                 t.DirectionKind = DirectionKind.TowardsPlace;
                 t.DirectionConfidence = ConfidenceLevel.Low;
             }
+        }
+        else if (o.Location is null && destination is not null)
+        {
+            ApplyDestinationOnly(t, o, destination, approachBearing);
         }
         if (o.DirectionDeg is double deg)
         {
@@ -103,6 +112,50 @@ public static class TrackUpdater
             t.DirectionKind = o.DirectionKind;
             t.DirectionConfidence = o.DirectionConfidence;
         }
+    }
+
+    /// <summary>
+    /// "БпЛА курсом на Конотоп" is the newest word on where the object is: on the approach to that place. The marker
+    /// moves there (an approximate position, drawn pale), whatever the track knew before — a report "на Сумщині"
+    /// ten minutes ago must not keep the marker on the oblast centroid. A precise previous fix still yields the
+    /// course towards the named place; the approach anchor never joins the observed path.
+    /// </summary>
+    private static void ApplyDestinationOnly(ThreatTrack t, Observation o, PlaceEntry destination, double? approachBearing)
+    {
+        var accuracy = Math.Max(destination.RadiusKm, Correlator.DestinationAnchorKm);
+        if (approachBearing is double bearing)
+        {
+            // Nothing else is known: the object is short of the destination on the side threats come from, heading in.
+            var anchor = Pipeline.ObservationBuilder.ApproachAnchor(destination, bearing);
+            t.LastLocation = anchor.Point;
+            t.LastLocationKind = LocationKind.DirectionOnly;
+            t.LastLocationPlaceId = destination.PlaceId;
+            t.LastLocationAccuracyKm = Math.Max(anchor.AccuracyKm, Correlator.DestinationAnchorKm);
+            if (o.DirectionDeg is null && (t.DirectionDeg is null || t.DirectionConfidence <= ConfidenceLevel.Low))
+            {
+                t.DirectionDeg = bearing;
+                t.DirectionKind = DirectionKind.TowardsPlace;
+                t.DirectionConfidence = ConfidenceLevel.Low;
+            }
+            return;
+        }
+        if (t.LastLocation is not null && t.LastLocationKind != LocationKind.DirectionOnly)
+        {
+            var from = t.LastLocation.Centroid.Coordinate;
+            var dist = Geo.DistanceKm(from, destination.Centroid.Coordinate);
+            var precise = (t.LastLocationAccuracyKm ?? 0) <= PathPointKm;
+            if (o.DirectionDeg is null && precise && dist > 5 && t.LastLocationPlaceId != destination.PlaceId
+                && (t.DirectionDeg is null || t.DirectionConfidence <= ConfidenceLevel.Low))
+            {
+                t.DirectionDeg = Geo.BearingDeg(from, destination.Centroid.Coordinate);
+                t.DirectionKind = DirectionKind.TowardsPlace;
+                t.DirectionConfidence = ConfidenceLevel.Low;
+            }
+        }
+        t.LastLocation = destination.Centroid;
+        t.LastLocationKind = LocationKind.DirectionOnly;
+        t.LastLocationPlaceId = destination.PlaceId;
+        t.LastLocationAccuracyKm = accuracy;
     }
 
     /// <summary>Track confidence grows with corroboration: more observations, more independent sources (spec §15).</summary>
@@ -145,10 +198,10 @@ public static class TrackUpdater
         ObservationId = observationId,
     };
 
-    /// <summary>The line starts with the first located observation (kept only as LastLocation until a second point arrives).</summary>
     /// <summary>Positions this precise are drawn on the observed path even without a detectable move.</summary>
     private const double PathPointKm = 50;
 
+    /// <summary>The line starts with the first located observation (kept only as LastLocation until a second point arrives).</summary>
     private static void AppendToGeometry(ThreatTrack t, Point? previous, Point p)
     {
         var coords = t.TrackGeometry?.Coordinates.ToList() ?? (previous is null ? [] : [previous.Coordinate.Copy()]);

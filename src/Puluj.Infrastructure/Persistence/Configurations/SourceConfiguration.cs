@@ -14,6 +14,7 @@ public class SourceConfiguration : IEntityTypeConfiguration<Source>
         b.Property(x => x.Name).HasMaxLength(256);
         b.Property(x => x.Url).HasMaxLength(1024);
         b.Property(x => x.Config).HasColumnType("jsonb");
+        b.Property(x => x.Secrets).HasColumnType("jsonb");
         b.HasOne(x => x.CollectorState).WithOne(x => x.Source).HasForeignKey<CollectorState>(x => x.SourceId);
     }
 }

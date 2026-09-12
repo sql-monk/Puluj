@@ -37,6 +37,7 @@ public sealed class RuleParser(IIndexes indexes) : IParser
         }
 
         var facts = new List<ParsedFact>();
+        int? sectionRegion = null;            // "Сумщина:" — the lines below are about that oblast
         ThreatMention? headerThreat = null;   // "Шахеди:" — applies to every following line
         ThreatMention? carryThreat = null;    // "Балістика!" followed by "Дніпро — в укриття!" — applies to the next line only
         int? carryFactIndex = null;
@@ -45,7 +46,22 @@ public sealed class RuleParser(IIndexes indexes) : IParser
             var rules = new List<string>();
             var threats = Collapse(threatMatcher.Match(segment, ctx));
             var reserved = threats.Select(t => (t.TokenIndex, t.TokenCount)).ToHashSet();
-            var places = placeMatcher.Match(segment, ctx, contextRegions, reserved);
+            var places = placeMatcher.Match(segment, ctx, contextRegions, reserved, sectionRegion);
+            // A line that is only an oblast name ("Сумщина:", "Чернігівщина") heads a section: it locates the lines
+            // below it, and it is not a sighting by itself.
+            if (threats.Count == 0 && places.Count == 1 && (places[0].Place.Level is PlaceLevel.Region or PlaceLevel.NamedArea || places[0].Place is { Level: PlaceLevel.City, ParentId: null })
+                && (segment.Text.TrimEnd().EndsWith(':') || segment.Tokens.Count <= 2))
+            {
+                sectionRegion = places[0].Place.PlaceId;
+                continue;
+            }
+            // Under a section header a sighting that names no place we know is at least somewhere in that oblast.
+            var sectionRules = new List<string>();
+            if (sectionRegion is int sr && places.Count == 0 && threats.Count > 0 && gazetteer.Get(sr) is { } sectionPlace)
+            {
+                places = [new PlaceMention(sectionPlace, PlaceRole.Current, sectionPlace.Name, 0, 0, 0)];
+                sectionRules.Add("section_region");
+            }
             var direction = DirectionExtractor.Extract(segment);
             var (eventType, eventRule, launch) = EventTypeMatcher.Match(segment, threats.Count > 0);
             var alertLevel = AlertLevelExtractor.Extract(segment);
@@ -53,6 +69,7 @@ public sealed class RuleParser(IIndexes indexes) : IParser
             {
                 rules.Add(eventRule);
             }
+            rules.AddRange(sectionRules);
 
             var isHeader = segment.Text.TrimEnd().EndsWith(':');
             if (threats.Count > 0 && isHeader && places.Count == 0)

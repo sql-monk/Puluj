@@ -150,16 +150,134 @@ public class CorrelatorTests
     }
 
     [Fact]
-    public void Adjacent_oblasts_form_a_path_but_no_derived_direction()
+    public void Adjacent_oblasts_give_neither_a_path_nor_a_direction()
     {
+        // Sumy oblast then Poltava oblast: the areas overlap, so a line between their centres is not a route anyone flew.
         var first = Obs(34.8, 50.9, 0);
         first.LocationAccuracyKm = 147;
         var track = TrackUpdater.CreateTrack(first, T0);
         var next = Obs(34.55, 49.59, 30);
         next.LocationAccuracyKm = 135;
         TrackUpdater.Apply(track, next, T0.AddMinutes(30), isNewer: true);
-        Assert.NotNull(track.TrackGeometry);
+        Assert.Null(track.TrackGeometry);
         Assert.Null(track.DirectionDeg);
+    }
+
+    [Fact]
+    public void Coarse_previous_position_does_not_seed_the_path()
+    {
+        // "на Сумщині", then a fix at a town: the line must not start at the oblast's centre.
+        var first = Obs(34.8, 50.9, 0);
+        first.LocationAccuracyKm = 147;
+        var track = TrackUpdater.CreateTrack(first, T0);
+        var town = Obs(34.55, 50.7, 10);
+        town.LocationAccuracyKm = 3;
+        TrackUpdater.Apply(track, town, T0.AddMinutes(10), isNewer: true);
+        Assert.Null(track.TrackGeometry);
+        var next = Obs(34.4, 50.5, 20);
+        next.LocationAccuracyKm = 3;
+        TrackUpdater.Apply(track, next, T0.AddMinutes(20), isNewer: true);
+        Assert.Equal(2, track.TrackGeometry!.NumPoints);
+        Assert.Equal(34.55, track.TrackGeometry.Coordinates[0].X, 3);
+    }
+
+    // A tiny gazetteer: Kyiv oblast as a rectangle, Brovary inside it, Sumy far to the east.
+    private static readonly PlaceEntry KyivOblast = new(5, "Київська область", PlaceLevel.Region, null, "UA", 0, Geo.Point(30.45, 50.30), 146,
+        Geo.Factory.CreatePolygon([new(29.3, 49.2), new(32.2, 49.2), new(32.2, 51.5), new(29.3, 51.5), new(29.3, 49.2)]));
+    private static readonly PlaceEntry Brovary = new(3932, "Бровари", PlaceLevel.City, 5, "UA", 100_000, Geo.Point(30.79, 50.51), 3);
+    private static readonly PlaceEntry Sumy = new(7, "Суми", PlaceLevel.City, null, "UA", 250_000, Geo.Point(34.8, 50.9), 5);
+    private static readonly GazetteerIndex Gazetteer = new([(KyivOblast, ["київщин"]), (Brovary, ["бровар"]), (Sumy, ["сум"])]);
+
+    private static Observation DestinationOnly(int destination, int minutes) => new()
+    {
+        ObservedAt = T0.AddMinutes(minutes),
+        ThreatCategoryId = 1,
+        ThreatClassId = 1,
+        ThreatFamilyId = 1,
+        LocationKind = LocationKind.DirectionOnly,
+        DestinationPlaceId = destination,
+        DirectionKind = DirectionKind.Unknown,
+        ObservationConfidence = ConfidenceLevel.Medium,
+        EventType = EventType.ThreatObserved,
+    };
+
+    private static ThreatTrack KyivOblastTrack()
+    {
+        var first = Obs(30.45, 50.30, 0, place: 5);
+        first.LocationAccuracyKm = 146;
+        return TrackUpdater.CreateTrack(first, T0);
+    }
+
+    [Fact]
+    public void Destination_only_report_is_anchored_on_the_approach_to_the_place()
+    {
+        // "1 БпЛА на Бровари" continues a Kyiv-oblast track; "1 БпЛА на Суми" (250 km east of the oblast) does not,
+        // even though the oblast's covering radius of 146 km would have said "close enough".
+        var track = KyivOblastTrack();
+        var tAnchor = Correlator.AnchorOf(track, Gazetteer);
+        Assert.NotNull(tAnchor!.Boundary);
+        var brovary = Correlator.Score(DestinationOnly(3932, 3), track, Shahed, 30, Correlator.AnchorOf(DestinationOnly(3932, 3), Gazetteer), tAnchor);
+        var sumy = Correlator.Score(DestinationOnly(7, 3), track, Shahed, 30, Correlator.AnchorOf(DestinationOnly(7, 3), Gazetteer), tAnchor);
+        Assert.True(brovary.Total >= 0.6, $"brovary {brovary}");
+        Assert.Equal(0, brovary.GapKm);
+        Assert.True(sumy.Total < 0.6, $"sumy {sumy}");
+        Assert.Equal(0, sumy.Space);
+    }
+
+    [Fact]
+    public void Report_without_any_place_never_attaches()
+    {
+        var track = KyivOblastTrack();
+        var nowhere = DestinationOnly(999, 1); // unknown destination: no anchor at all
+        Assert.Null(Correlator.AnchorOf(nowhere, Gazetteer));
+        var score = Correlator.Score(nowhere, track, Shahed, 30, null, Correlator.AnchorOf(track, Gazetteer));
+        Assert.Equal(0, score.Space);
+        Assert.True(score.Total < 0.6, $"score {score}");
+    }
+
+    [Fact]
+    public void Destination_only_track_starts_at_the_approach_and_moves_to_the_first_real_fix()
+    {
+        var track = TrackUpdater.CreateTrack(DestinationOnly(3932, 0), T0, Brovary);
+        Assert.Equal(LocationKind.DirectionOnly, track.LastLocationKind);
+        Assert.Equal(3932, track.LastLocationPlaceId);
+        Assert.Equal(Correlator.DestinationAnchorKm, track.LastLocationAccuracyKm);
+        // A real position replaces the anchor and the path does not start at the anchor.
+        var fix = Obs(30.6, 50.45, 5, place: 4000);
+        fix.LocationAccuracyKm = 3;
+        fix.LocationKind = LocationKind.City;
+        TrackUpdater.Apply(track, fix, T0.AddMinutes(5), isNewer: true);
+        Assert.Equal(LocationKind.City, track.LastLocationKind);
+        Assert.Null(track.TrackGeometry);
+    }
+
+    [Fact]
+    public void Named_destination_moves_the_marker_to_the_approach()
+    {
+        // "на Сумщині" then "курсом на Бровари": the marker goes to the approach to Brovary, not the oblast centroid;
+        // a bearing from an oblast centre would be noise, so no course is derived from a coarse previous position.
+        var track = KyivOblastTrack();
+        TrackUpdater.Apply(track, DestinationOnly(3932, 4), T0.AddMinutes(4), isNewer: true, Brovary);
+        Assert.Equal(3932, track.LastLocationPlaceId);
+        Assert.Equal(LocationKind.DirectionOnly, track.LastLocationKind);
+        Assert.Equal(Correlator.DestinationAnchorKm, track.LastLocationAccuracyKm);
+        Assert.Null(track.DirectionDeg);
+    }
+
+    [Fact]
+    public void Named_destination_after_a_precise_fix_gives_the_course()
+    {
+        // Fixed over a town, then "курсом на Бровари": the marker moves to the approach and the arrow points at Brovary.
+        var fix = Obs(30.45, 50.30, 0, place: 4000);
+        fix.LocationAccuracyKm = 3;
+        fix.LocationKind = LocationKind.City;
+        var track = TrackUpdater.CreateTrack(fix, T0);
+        TrackUpdater.Apply(track, DestinationOnly(3932, 4), T0.AddMinutes(4), isNewer: true, Brovary);
+        Assert.Equal(3932, track.LastLocationPlaceId);
+        Assert.Equal(DirectionKind.TowardsPlace, track.DirectionKind);
+        Assert.Equal(ConfidenceLevel.Low, track.DirectionConfidence);
+        Assert.InRange(track.DirectionDeg!.Value, 30, 60);
+        Assert.Null(track.TrackGeometry); // the approach anchor is not a fix on the path
     }
 
     [Fact]

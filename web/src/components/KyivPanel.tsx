@@ -2,7 +2,9 @@ import { useMemo } from 'react'
 import { useStore, type Filters } from '../store/useStore'
 import Legend from './Legend'
 
-const items: { key: keyof Filters; label: string }[] = [
+type BoolFilter = { [K in keyof Filters]: Filters[K] extends boolean ? K : never }[keyof Filters]
+
+const items: { key: BoolFilter; label: string }[] = [
   { key: 'uav', label: 'БпЛА' },
   { key: 'cruise', label: 'Крилаті ракети' },
   { key: 'ballistic', label: 'Балістика' },
@@ -14,7 +16,7 @@ const items: { key: keyof Filters; label: string }[] = [
 const RECENT_MS = 60 * 60_000
 
 /** Kyiv page left panel: the ten districts with their alert state and recent message count, plus the class filters. */
-export default function KyivPanel({ open }: { open: boolean }) {
+export default function KyivPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
   const regions = useStore((s) => s.regions)
   const alerts = useStore((s) => s.alerts)
   const observations = useStore((s) => s.observations)
@@ -54,8 +56,9 @@ export default function KyivPanel({ open }: { open: boolean }) {
   return (
     <aside
       className={`pointer-events-auto absolute z-10 flex max-h-[60vh] w-full flex-col gap-3 overflow-y-auto rounded-t-xl bg-white/95 p-3 shadow-lg backdrop-blur transition-transform md:left-3 md:top-14 md:max-h-[calc(100vh-5rem)] md:w-72 md:rounded-xl dark:bg-slate-900/95 dark:text-slate-100 ${
-        open ? 'bottom-0 translate-y-0' : 'bottom-0 translate-y-full md:translate-y-0'
+        open ? 'bottom-0 translate-y-0' : 'pointer-events-none bottom-0 translate-y-full md:-translate-x-[120%] md:translate-y-0'
       }`}
+      aria-hidden={!open}
     >
       <div>
         <div className="mb-1 flex items-baseline justify-between">
@@ -68,6 +71,9 @@ export default function KyivPanel({ open }: { open: boolean }) {
               усе місто {cityLevel && chip(cityLevel === 'Yellow' ? 'yellow' : 'red')}
             </button>
           )}
+          <button className="ml-2 rounded px-1.5 py-0.5 text-base leading-none text-slate-400 hover:bg-slate-200 hover:text-slate-700 dark:hover:bg-slate-700 dark:hover:text-slate-200" onClick={onClose} title="Згорнути панель" aria-label="Згорнути панель">
+            ‹
+          </button>
         </div>
         {rows.length === 0 && <div className="text-xs text-slate-500">Полігони районів ще не завантажені.</div>}
         <ul className="text-sm">

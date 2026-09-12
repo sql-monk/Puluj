@@ -83,13 +83,14 @@ public static class AdminEndpoints
             return Results.Ok(new { saved = values.Count });
         });
 
-        admin.MapGet("/status", async (IConfiguration config, SettingsStore store, TimeProvider clock, CancellationToken ct) =>
+        admin.MapGet("/status", async (IConfiguration config, SettingsStore store, IDbContextFactory<PulujDbContext> factory, TimeProvider clock, CancellationToken ct) =>
         {
             var db = await store.GetAllAsync(ct);
+            var alertsToken = await AlertsTokenAsync(factory, config, ct);
             var heartbeat = db.TryGetValue("Runtime:Worker:Heartbeat", out var hb) && DateTimeOffset.TryParse(hb.Value, out var t) ? t : (DateTimeOffset?)null;
             var llmKey = config["Llm:ApiKey"] ?? Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
             return new AdminStatusDto(
-                AlertsConfigured: config.GetValue<bool>("Collectors:AlertsInUa:Enabled") && !string.IsNullOrEmpty(config["Collectors:AlertsInUa:Token"]),
+                AlertsConfigured: config.GetValue<bool>("Collectors:AlertsInUa:Enabled") && !string.IsNullOrEmpty(alertsToken),
                 TelegramConfigured: config.GetValue<bool>("Collectors:Telegram:Enabled") && config.GetValue<int>("Collectors:Telegram:ApiId") != 0
                                     && !string.IsNullOrEmpty(config["Collectors:Telegram:ApiHash"]) && !string.IsNullOrEmpty(config["Collectors:Telegram:Phone"]),
                 LlmConfigured: config.GetValue<bool>("Llm:Enabled") && !string.IsNullOrEmpty(llmKey),
@@ -164,6 +165,19 @@ public static class AdminEndpoints
                 }
                 s.Config = JsonDocument.Parse(cfg.ToJsonString());
             }
+            if (req.Token is not null)
+            {
+                var secrets = s.Secrets is null ? new JsonObject() : JsonNode.Parse(s.Secrets.RootElement.GetRawText())!.AsObject();
+                if (string.IsNullOrWhiteSpace(req.Token))
+                {
+                    secrets.Remove("token");
+                }
+                else
+                {
+                    secrets["token"] = req.Token.Trim();
+                }
+                s.Secrets = secrets.Count == 0 ? null : JsonDocument.Parse(secrets.ToJsonString());
+            }
             await db.SaveChangesAsync(ct);
             var count = await db.RawMessages.LongCountAsync(r => r.SourceId == id, ct);
             return Results.Ok(ToDto(s, clock.GetUtcNow(), count));
@@ -232,9 +246,13 @@ public static class AdminEndpoints
         });
 
         // Quick credential check without waiting for the Worker: one request to alerts.in.ua with the stored or supplied token.
-        admin.MapPost("/test/alerts", async (IConfiguration config, IHttpClientFactory http, HttpContext ctx, CancellationToken ct) =>
+        admin.MapPost("/test/alerts", async (IConfiguration config, IHttpClientFactory http, IDbContextFactory<PulujDbContext> factory, HttpContext ctx, CancellationToken ct) =>
         {
-            var token = ctx.Request.Headers["X-Test-Token"].FirstOrDefault() ?? config["Collectors:AlertsInUa:Token"];
+            var token = ctx.Request.Headers["X-Test-Token"].FirstOrDefault();
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                token = await AlertsTokenAsync(factory, config, ct);
+            }
             if (string.IsNullOrWhiteSpace(token))
             {
                 return new TestResultDto(false, "Токен не задано");
@@ -279,6 +297,14 @@ public static class AdminEndpoints
         return supplied == token ? await next(ctx) : Results.Json(new { error = "invalid admin token" }, statusCode: 401);
     }
 
+    /// <summary>The alerts.in.ua token: the one stored on the alerts source, else the configuration / env fallback.</summary>
+    private static async Task<string?> AlertsTokenAsync(IDbContextFactory<PulujDbContext> factory, IConfiguration config, CancellationToken ct)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var source = await db.Sources.AsNoTracking().FirstOrDefaultAsync(s => s.Code == Puluj.Collectors.AlertsInUa.AlertsInUaCollector.CollectorCode, ct);
+        return source?.Secret("token") is { Length: > 0 } t ? t : config["Collectors:AlertsInUa:Token"];
+    }
+
     private static AdminSourceDto ToDto(Source s, DateTimeOffset now, long rawCount)
     {
         var st = s.CollectorState;
@@ -289,7 +315,7 @@ public static class AdminEndpoints
             : "ok";
         string? Str(string name) => s.Config is not null && s.Config.RootElement.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
         return new AdminSourceDto(s.SourceId, s.Code, s.Name, s.Type.ToString(), s.Enabled, s.TrustLevel, s.Priority, s.Url, Str("channel"),
-            s.PollingInterval is { } pi ? (int)pi.TotalSeconds : null, Str("homeRegion"), rawCount,
+            s.PollingInterval is { } pi ? (int)pi.TotalSeconds : null, Str("homeRegion"), !string.IsNullOrEmpty(s.Secret("token")), rawCount,
             st?.LastSuccessAt, st?.LastMessageAt, st?.ConsecutiveFailures ?? 0, st?.LastError, status);
     }
 }

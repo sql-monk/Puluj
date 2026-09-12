@@ -1,7 +1,10 @@
 import bearing from '@turf/bearing'
+import booleanPointInPolygon from '@turf/boolean-point-in-polygon'
 import distance from '@turf/distance'
-import { point } from '@turf/helpers'
-import type { Confidence, TrackDto } from '../api/types'
+import { lineString, point } from '@turf/helpers'
+import pointToLineDistance from '@turf/point-to-line-distance'
+import type { Geometry, MultiPolygon, Polygon } from 'geojson'
+import type { Confidence, RegionDto, TrackDto } from '../api/types'
 
 // Specification of this algorithm: docs/README.md#карта-і-eta. Kept as a pure function so it is unit-tested and can be
 // mirrored server-side later (pre-computation to city centroids) without divergence.
@@ -33,7 +36,20 @@ export function angleDiffDeg(a: number, b: number): number {
   return d > 180 ? 360 - d : d
 }
 
-export function computeEta(track: TrackDto, home: Home, now: Date): EtaResult {
+/**
+ * Distance (km) from a point to the edge of a region: 0 when the point is inside. With a real polygon the
+ * "how close can it be" bound no longer collapses to zero for anyone within the region's covering radius.
+ */
+export function distanceToRegionKm(home: Home, geometry: Geometry): number | null {
+  if (geometry.type !== 'Polygon' && geometry.type !== 'MultiPolygon') return null
+  const me = point([home.lon, home.lat])
+  if (booleanPointInPolygon(me, geometry as Polygon | MultiPolygon)) return 0
+  const rings = geometry.type === 'Polygon' ? [geometry.coordinates[0]] : geometry.coordinates.map((p) => p[0])
+  return Math.min(...rings.map((ring) => pointToLineDistance(me, lineString(ring), { units: 'kilometers' })))
+}
+
+/** @param regionsById Region polygons, when the caller has them: sharpens the bounds for region-level reports. */
+export function computeEta(track: TrackDto, home: Home, now: Date, regionsById?: Map<number, RegionDto>): EtaResult {
   const profile = track.threat.speedProfile
   if (!profile.etaEnabled) {
     return { kind: 'unknown', reason: 'disabled' }
@@ -50,6 +66,9 @@ export function computeEta(track: TrackDto, home: Home, now: Date): EtaResult {
   const to = point([home.lon, home.lat])
   const distanceKm = distance(from, to, { units: 'kilometers' })
   const accuracy = loc.accuracyKm ?? 0
+  // Region-level report with a known polygon: the nearest the object can be is the region's edge (or here, if inside).
+  const region = (loc.kind === 'Region' || loc.kind === 'Area') && loc.placeId ? regionsById?.get(loc.placeId) : undefined
+  const edgeKm = region ? distanceToRegionKm(home, region.geometry) : null
   const elapsedMin = (now.getTime() - new Date(track.lastSeenAt).getTime()) / 60000
 
   if (elapsedMin > track.threat.fadeMinutes * 2) {
@@ -57,7 +76,7 @@ export function computeEta(track: TrackDto, home: Home, now: Date): EtaResult {
   }
 
   // Direction check only when the user is clearly outside the reported area.
-  const insideArea = distanceKm <= accuracy
+  const insideArea = edgeKm !== null ? edgeKm === 0 : distanceKm <= accuracy
   if (track.direction && !insideArea) {
     const toHome = (bearing(from, to) + 360) % 360
     const diff = angleDiffDeg(toHome, track.direction.degrees)
@@ -66,7 +85,7 @@ export function computeEta(track: TrackDto, home: Home, now: Date): EtaResult {
     }
   }
 
-  const dMin = Math.max(0, distanceKm - accuracy)
+  const dMin = edgeKm ?? Math.max(0, distanceKm - accuracy)
   const dMax = distanceKm + accuracy
   const etaMinRaw = (dMin / profile.maxKmh) * 60 - elapsedMin
   const etaMaxRaw = (dMax / profile.minKmh) * 60 - elapsedMin

@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import type { TrackDto } from '../api/types'
+import type { RegionDto, TrackDto } from '../api/types'
 import { effectiveNow, useStore } from '../store/useStore'
 import { computeEta, type EtaResult } from './computeEta'
 
@@ -9,6 +9,8 @@ export function useEta(track: TrackDto | null | undefined): EtaResult | null {
   const mode = useStore((s) => s.mode)
   const at = useStore((s) => s.at)
   const now = useStore((s) => s.now)
+  const regions = useStore((s) => s.regions)
   const clock = effectiveNow({ mode, at, now })
-  return useMemo(() => (track && home ? computeEta(track, home, clock) : null), [track, home, clock])
+  const regionsById = useMemo(() => new Map<number, RegionDto>(regions.map((r) => [r.id, r])), [regions])
+  return useMemo(() => (track && home ? computeEta(track, home, clock, regionsById) : null), [track, home, clock, regionsById])
 }

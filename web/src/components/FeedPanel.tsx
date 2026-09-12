@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react'
 import type { ObservationDto } from '../api/types'
 import { clock, confidenceLabel } from '../lib/format'
-import { colors } from '../map/geojson'
-import { useStore } from '../store/useStore'
+import Highlight from './Highlight'
+import { sourceEnabled, usePalette, useStore } from '../store/useStore'
 
 const eventLabel: Record<string, string> = {
   ThreatObserved: 'загроза',
@@ -23,18 +23,25 @@ export default function FeedPanel({ open, onToggle }: { open: boolean; onToggle:
   const alerts = useStore((s) => s.alerts)
   const mode = useStore((s) => s.mode)
   const at = useStore((s) => s.at)
+  const filters = useStore((s) => s.filters)
+  const selectedTrackId = useStore((s) => s.selectedTrackId)
+  const selectedTrack = useStore((s) => (s.selectedTrackId ? s.tracks[s.selectedTrackId] : undefined))
+  const selectedMessages = useMemo(() => new Set(selectedTrack?.messageIds ?? []), [selectedTrack])
+  const palette = usePalette()
   const [expanded, setExpanded] = useState<number | null>(null)
 
   const region = regions.find((r) => r.id === selectedRegionId)
   // In replay the feed only shows what had been reported by the cursor instant.
   const cutoff = mode === 'history' && at ? at.getTime() : null
   const list = useMemo(() => {
-    const byTime = cutoff === null ? observations : observations.filter((o) => new Date(o.observedAt).getTime() <= cutoff)
+    const bySource = observations.filter((o) => sourceEnabled(o.source.id, filters))
+    const byTime = cutoff === null ? bySource : bySource.filter((o) => new Date(o.observedAt).getTime() <= cutoff)
     if (!selectedRegionId) return byTime
     const hit = (o: ObservationDto) =>
       o.location?.regionId === selectedRegionId || o.location?.placeId === selectedRegionId || o.origin?.regionId === selectedRegionId || o.destination?.regionId === selectedRegionId
-    return byTime.filter(hit)
-  }, [observations, selectedRegionId, cutoff])
+    // The selected target's own lines are never hidden by the region filter.
+    return byTime.filter((o) => hit(o) || (selectedTrackId !== null && o.trackId === selectedTrackId))
+  }, [observations, selectedRegionId, cutoff, filters, selectedTrackId])
   const fresh = (o: ObservationDto) => cutoff !== null && cutoff - new Date(o.observedAt).getTime() < 3 * 60_000
   // Alerts of the oblast itself plus levelled raion alerts inside it.
   const regionAlerts = selectedRegionId
@@ -70,13 +77,20 @@ export default function FeedPanel({ open, onToggle }: { open: boolean; onToggle:
       </div>
       {!region && <div className="border-b border-slate-100 px-3 py-1 text-[11px] text-slate-500 dark:border-slate-800">Клікніть по області на карті, щоб бачити лише її повідомлення.</div>}
       <ol className="flex-1 overflow-y-auto text-xs">
-        {list.length === 0 && <li className="p-3 text-slate-500">Немає повідомлень{region ? ` для ${region.name}` : ''} за останні години.</li>}
+        {list.length === 0 && (
+          <li className="p-3 text-slate-500">
+            Немає повідомлень{region ? ` для ${region.name}` : ''}
+            {filters.sources !== null ? ' від вибраних джерел' : ''} за останні години.
+          </li>
+        )}
         {list.map((o) => {
-          const color = o.threat ? (colors[o.threat.displayMode] ?? colors.uav) : o.eventType === 'AirRaidAlert' ? '#dc2626' : o.eventType === 'AlertCancelled' || o.eventType === 'ThreatCancelled' ? '#16a34a' : '#64748b'
+          const color = o.threat ? (palette.marker[o.threat.displayMode] ?? palette.marker.uav) : o.eventType === 'AirRaidAlert' ? palette.alertRedLine : o.eventType === 'AlertCancelled' || o.eventType === 'ThreatCancelled' ? palette.home : '#64748b'
+          const mine = selectedTrackId !== null && o.trackId === selectedTrackId
+          const withSelected = !mine && selectedTrackId !== null && selectedMessages.has(o.rawMessage.id)
           const isOpen = expanded === o.id
           const text = o.rawMessage.text ?? o.segmentText ?? ''
           return (
-            <li key={o.id} className={`border-b border-slate-100 px-3 py-2 dark:border-slate-800 ${o.duplicateOfObservationId ? 'opacity-70' : ''} ${fresh(o) ? 'bg-indigo-50 dark:bg-indigo-950/40' : ''}`}>
+            <li key={o.id} className={`border-b border-slate-100 px-3 py-2 dark:border-slate-800 ${o.duplicateOfObservationId ? 'opacity-70' : ''} ${fresh(o) ? 'bg-indigo-50 dark:bg-indigo-950/40' : ''} ${mine ? 'border-l-4 bg-amber-50 dark:bg-amber-900/30' : withSelected ? 'border-l-4 border-l-slate-300 dark:border-l-slate-600' : ''}`} style={mine ? { borderLeftColor: color } : undefined}>
               <div className="flex items-baseline gap-2">
                 <span className="font-mono">{clock(o.observedAt)}</span>
                 <span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ background: color }} />
@@ -92,7 +106,7 @@ export default function FeedPanel({ open, onToggle }: { open: boolean; onToggle:
                 {o.duplicateOfObservationId && ' · дубль'}
               </div>
               <button className={`mt-0.5 block w-full text-left text-[12px] leading-snug text-slate-800 dark:text-slate-200 ${isOpen ? 'whitespace-pre-wrap' : 'truncate'}`} onClick={() => setExpanded(isOpen ? null : o.id)} title={isOpen ? 'Згорнути' : 'Розгорнути'}>
-                {text || '(без тексту)'}
+                {mine && o.segmentText ? <Highlight text={text} part={o.segmentText} folded={!isOpen} /> : text || '(без тексту)'}
               </button>
               {isOpen && o.rawMessage.url && (
                 <a className="text-[11px] text-blue-600 underline dark:text-blue-300" href={o.rawMessage.url} target="_blank" rel="noreferrer">

@@ -23,7 +23,11 @@ public sealed class PlaceMatcher(GazetteerIndex gazetteer)
     private static readonly string[] LocativeEndings = ["і", "ї", "ах", "ях", "ій", "ому", "ім", "ині", "щині", "ї"];
     private static readonly string[] AccusativeEndings = ["у", "ю", "щину", "ину"];
 
-    public IReadOnlyList<PlaceMention> Match(Segment segment, ParseContext ctx, IReadOnlySet<int> contextRegions, IReadOnlySet<(int, int)> reservedSpans)
+    /// <param name="sectionRegion">
+    /// The oblast whose header line the segment sits under ("Сумщина:" … "БпЛА курсом на Кириківку"). Candidates inside it
+    /// win; a village or town that exists only in other oblasts is a namesake we do not have and is not matched at all.
+    /// </param>
+    public IReadOnlyList<PlaceMention> Match(Segment segment, ParseContext ctx, IReadOnlySet<int> contextRegions, IReadOnlySet<(int, int)> reservedSpans, int? sectionRegion = null)
     {
         var tokens = segment.Tokens;
         var found = new List<(int Start, int Len, PlaceEntry Place, int Score)>();
@@ -72,10 +76,21 @@ public sealed class PlaceMatcher(GazetteerIndex gazetteer)
             }
             var best = group
                 .OrderByDescending(f => f.Score / 10) // matched characters first
+                .ThenByDescending(f => InSection(f.Place, sectionRegion) ? 1 : 0)
                 .ThenByDescending(f => InContext(f.Place, contextRegions, ctx) ? 1 : 0)
                 .ThenByDescending(f => f.Place.Level is PlaceLevel.Region or PlaceLevel.NamedArea ? 1 : 0)
                 .ThenByDescending(f => f.Place.Population)
                 .First();
+            if (sectionRegion is not null && best.Place.Level >= PlaceLevel.Town && !InSection(best.Place, sectionRegion))
+            {
+                continue; // "Чернігівщина: … на Дмитрівку" with Dmytrivkas only in Poltava and Odesa oblasts: not those
+            }
+            // Thousands of villages share names with ordinary words ("Мир", "Нове", "Веселе"): a small place counts only
+            // after a place cue ("на", "біля", "курсом на", "н.п.") or under its own oblast's header.
+            if (best.Place.Level == PlaceLevel.Village && best.Place.Population < WeakPopulation && !HasPlaceCue(tokens, best.Start) && !InSection(best.Place, sectionRegion))
+            {
+                continue;
+            }
             var nominative = group.Any(f => IsNominative(f.Place, tokens, best.Start, best.Len));
             var role = RoleFor(tokens, best.Start, best.Len, ctx.Language, nominative);
             result.Add(new PlaceMention(best.Place, role, segment.Slice(best.Start, best.Start + best.Len), best.Start, best.Len, best.Score, Quadrant(tokens, best.Start)));
@@ -135,6 +150,25 @@ public sealed class PlaceMatcher(GazetteerIndex gazetteer)
         }
         return false;
     }
+
+    private const int WeakPopulation = 500;
+    private static readonly HashSet<string> CueWords = ["на", "в", "у", "до", "з", "із", "зі", "від", "над", "біля", "поблизу", "неподалік", "повз", "через", "н.п", "с", "смт", "м", "село", "селище", "районі", "бік", "сторону", "напрямку"];
+
+    /// <summary>A preposition or a settlement marker right before the name.</summary>
+    private static bool HasPlaceCue(IReadOnlyList<Token> tokens, int start)
+    {
+        for (var i = Math.Max(0, start - 2); i < start; i++)
+        {
+            if (CueWords.Contains(tokens[i].Text.TrimEnd('.')))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private bool InSection(PlaceEntry place, int? sectionRegion) =>
+        sectionRegion is int sr && (place.PlaceId == sr || gazetteer.RegionOf(place)?.PlaceId == sr);
 
     private bool InContext(PlaceEntry place, IReadOnlySet<int> contextRegions, ParseContext ctx)
     {

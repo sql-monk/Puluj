@@ -1,4 +1,4 @@
-import type { Confidence, DirectionDto, LocationKind } from '../api/types'
+import type { Confidence, DirectionDto, LocationKind, TrackDto } from '../api/types'
 import type { EtaResult } from '../eta/computeEta'
 
 export function timeAgo(iso: string, now: Date): string {
@@ -27,7 +27,7 @@ export const confidenceLabel: Record<Confidence, string> = {
 
 export const locationKindLabel: Record<LocationKind, string> = {
   Unknown: 'локація невідома',
-  DirectionOnly: 'лише напрямок',
+  DirectionOnly: 'на підході, позиція приблизна',
   Region: 'область',
   District: 'район',
   City: 'населений пункт',
@@ -71,4 +71,13 @@ export function etaText(eta: EtaResult | null): string {
 
 export function etaConfidence(eta: EtaResult | null): string {
   return eta && (eta.kind === 'range' || eta.kind === 'imminent') ? confidenceLabel[eta.confidence] : ''
+}
+
+/** "Ромни 21:40 → на Конотоп 21:52 → зараз: Кролевець": the earlier reported positions, then the current one. */
+export function fixChain(track: TrackDto): string {
+  const fixes = track.fixes
+  if (fixes.length < 2) return ''
+  const earlier = fixes.slice(0, -1).map((f) => `${f.approach ? 'на підході до ' : ''}${f.placeName ?? '?'} ${clock(f.at)}`)
+  const now = track.lastLocation?.placeName ?? fixes[fixes.length - 1].placeName ?? '?'
+  return `${earlier.join(' → ')} → зараз: ${now}`
 }

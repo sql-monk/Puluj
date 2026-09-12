@@ -55,27 +55,44 @@ public sealed class DtoMapper(ReferenceCache refs)
         return new LocationDto(kind.ToString(), place.Id, place.Name, region?.Id, region?.Id == place.Id ? null : region?.Name, Geo.Point(place.Lon, place.Lat), place.RadiusKm);
     }
 
+    /// <summary>The position an observation reported: its location, else the destination it named (an approach).</summary>
+    public FixDto? Fix(Observation o)
+    {
+        if (o.Location is not null && o.LocationKind != LocationKind.DirectionOnly)
+        {
+            var p = o.Location.Centroid;
+            p.SRID = Geo.Srid;
+            return new FixDto(o.ObservedAt, refs.Place(o.LocationPlaceId)?.Name, o.LocationKind.ToString(), p, o.LocationAccuracyKm, false);
+        }
+        var destId = o.LocationKind == LocationKind.DirectionOnly ? (o.LocationPlaceId ?? o.DestinationPlaceId) : o.DestinationPlaceId;
+        if (refs.Place(destId) is { } dest)
+        {
+            return new FixDto(o.ObservedAt, dest.Name, LocationKind.DirectionOnly.ToString(), Geo.Point(dest.Lon, dest.Lat), dest.RadiusKm, true);
+        }
+        return null;
+    }
+
     public static DirectionDto? Direction(DirectionKind kind, double? deg, ConfidenceLevel confidence) =>
         deg is double d && kind != DirectionKind.Unknown ? new DirectionDto(Math.Round(d), kind.ToString(), confidence.ToString()) : null;
 
-    public TrackDto Track(ThreatTrack t) => new(
+    public TrackDto Track(ThreatTrack t, IReadOnlyList<int> sourceIds, IReadOnlyList<FixDto>? fixes = null, IReadOnlyList<long>? messageIds = null) => new(
         t.ThreatTrackId, t.Status.ToString(), t.ClosedReason,
         Threat(t.ThreatCategoryId, t.ThreatClassId, t.ThreatFamilyId, t.ThreatModelId),
         t.ModelConfidence.ToString(), t.TrackConfidence.ToString(),
         t.FirstSeenAt, t.LastSeenAt, t.UpdatedAt,
         Location(t.LastLocationKind, t.LastLocationPlaceId, t.LastLocation, t.LastLocationAccuracyKm),
         t.TrackGeometry, Direction(t.DirectionKind, t.DirectionDeg, t.DirectionConfidence),
-        t.ObjectCount, t.ObservationCount, t.DistinctSourceCount);
+        t.ObjectCount, t.ObservationCount, t.DistinctSourceCount, sourceIds, fixes ?? [], messageIds ?? []);
 
     /// <summary>A track as it was at the time of the revision (historical mode).</summary>
-    public TrackDto Track(ThreatTrackRevision r, int distinctSourceCount) => new(
+    public TrackDto Track(ThreatTrackRevision r, IReadOnlyList<int> sourceIds, IReadOnlyList<FixDto>? fixes = null, IReadOnlyList<long>? messageIds = null) => new(
         r.ThreatTrackId, r.Status.ToString(), null,
         Threat(r.ThreatCategoryId, r.ThreatClassId, r.ThreatFamilyId, r.ThreatModelId),
         r.ModelConfidence.ToString(), r.TrackConfidence.ToString(),
         r.LastSeenAt, r.LastSeenAt, r.RevisionAt,
         Location(r.LastLocationKind, r.LastLocationPlaceId, r.LastLocation, r.LastLocationAccuracyKm),
         r.TrackGeometry, Direction(r.DirectionKind, r.DirectionDeg, r.DirectionConfidence),
-        r.ObjectCount, r.ObservationCount, distinctSourceCount);
+        r.ObjectCount, r.ObservationCount, Math.Max(1, sourceIds.Count), sourceIds, fixes ?? [], messageIds ?? []);
 
     public AlertDto Alert(AirAlert a) =>
         new(a.AirAlertId, a.PlaceId, refs.Place(a.PlaceId)?.Name ?? $"#{a.PlaceId}", a.AlertType.ToString(), a.Level.ToString(), a.StartedAt, a.EndedAt, PlaceLocation(a.PlaceId));
@@ -84,7 +101,7 @@ public sealed class DtoMapper(ReferenceCache refs)
 
     public static RawMessageDto RawMessage(RawMessage r) => new(r.RawMessageId, r.SourceMessageId, r.PublishedAt, r.ReceivedAt, r.RawText, r.Url);
 
-    public ObservationDto Observation(Observation o, double? associationConfidence)
+    public ObservationDto Observation(Observation o, double? associationConfidence, long? trackId = null)
     {
         var source = refs.Sources.TryGetValue(o.SourceId, out var s) ? Source(s) : new SourceDto(o.SourceId, "?", "?", "?", 0, null);
         return new ObservationDto(
@@ -96,7 +113,7 @@ public sealed class DtoMapper(ReferenceCache refs)
             Direction(o.DirectionKind, o.DirectionDeg, o.DirectionConfidence),
             o.ObjectCount, o.ObjectCountIsApproximate,
             o.IdentificationMethod.ToString(), o.IdentificationSource, o.SegmentText, o.DuplicateOfObservationId,
-            associationConfidence, source, RawMessage(o.RawMessage!));
+            associationConfidence, source, RawMessage(o.RawMessage!), trackId);
     }
 
     public PlaceDto Place(ReferenceCache.PlaceInfo p) =>

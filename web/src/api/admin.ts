@@ -20,6 +20,8 @@ export interface AdminSourceDto {
   channel?: string
   pollingIntervalSeconds?: number
   homeRegion?: string
+  /** A token is stored on the source (the value itself never comes back). */
+  hasToken: boolean
   rawMessageCount: number
   lastSuccessAt?: string
   lastMessageAt?: string
@@ -37,6 +39,8 @@ export interface SourcePatch {
   channel?: string
   url?: string
   homeRegion?: string
+  /** API token to store on the source; empty string removes it. */
+  token?: string
 }
 
 export interface AdminStatusDto {

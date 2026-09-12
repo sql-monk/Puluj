@@ -3,8 +3,10 @@ using Puluj.Domain.Enums;
 
 namespace Puluj.Processing.Indexes;
 
+/// <param name="Boundary">Polygon of an admin unit or named area (null for settlements, which are points): lets the
+/// correlator ask "is this town inside that oblast" instead of trusting the oblast's covering radius.</param>
 public sealed record PlaceEntry(int PlaceId, string Name, PlaceLevel Level, int? ParentId, string CountryCode,
-    int Population, Point Centroid, double RadiusKm);
+    int Population, Point Centroid, double RadiusKm, Geometry? Boundary = null);
 
 public sealed record PlaceVariant(string[] Words, PlaceEntry Place);
 
@@ -38,6 +40,38 @@ public sealed class GazetteerIndex
     }
 
     public static GazetteerIndex Empty { get; } = new([]);
+
+    private static readonly HashSet<string> Friendly = ["UA", "MD", "XX"];
+    private List<Geometry>? _hostile;
+
+    /// <summary>Polygons of the regions threats are launched from (everything imported that is not Ukraine, Moldova or a named area).</summary>
+    private List<Geometry> Hostile => _hostile ??= _byId.Values
+        .Where(p => p.Boundary is not null && p.Level == PlaceLevel.Region && !Friendly.Contains(p.CountryCode))
+        .Select(p => p.Boundary!)
+        .ToList();
+
+    /// <summary>
+    /// The course an object heading for `destination` most plausibly holds: from the nearest hostile territory towards it.
+    /// "Київ: БпЛА курсом на Троєщину" is not flying from the city centre; it comes in from Belarus or Russia.
+    /// Null when no hostile polygon is loaded.
+    /// </summary>
+    public double? ApproachBearingTo(Coordinate destination)
+    {
+        var point = new GeometryFactory().CreatePoint(destination);
+        Coordinate? nearest = null;
+        var best = double.MaxValue;
+        foreach (var g in Hostile)
+        {
+            var pts = NetTopologySuite.Operation.Distance.DistanceOp.NearestPoints(g, point);
+            var d = pts[0].Distance(pts[1]);
+            if (d < best)
+            {
+                best = d;
+                nearest = pts[0];
+            }
+        }
+        return nearest is null ? null : Puluj.Infrastructure.Persistence.Geo.BearingDeg(nearest, destination);
+    }
 
     public int Count => _byId.Count;
 

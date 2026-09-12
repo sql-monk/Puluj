@@ -27,7 +27,7 @@
 ## Швидкий старт (Docker)
 
 ```bash
-cp .env.example .env            # заповнити токени (alerts.in.ua, Telegram) — без них колектори стоять idle
+cp .env.example .env            # опційно: токени можна ввести на сторінці ⚙ Налаштування — вони зберігаються в БД
 pwsh scripts/gazetteer/download.ps1   # або scripts/gazetteer/download.sh — геодані (~80 MB, не в git)
 docker compose -f deploy/docker-compose.yml up --build
 # http://localhost:8080  (health: /api/health)
@@ -45,6 +45,7 @@ python scripts/dev-scenario.py             # демо-ситуація чере�
 ```
 
 `npm run build` збирає SPA у `src/Puluj.Api/wwwroot`, після чого `http://localhost:5257/` віддає готовий інтерфейс.
+`pwsh scripts/dev-run.ps1 -Public` робить це автоматично і відкриває Api на всіх інтерфейсах (`http://<LAN-IP>:5257`) — доступ з інших пристроїв у мережі без Vite; правило firewall для 5257 додається один раз (потрібен запуск від адміністратора).
 
 ## Конфігурація (env / appsettings)
 

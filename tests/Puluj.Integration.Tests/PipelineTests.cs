@@ -118,7 +118,7 @@ public sealed class PipelineTests : IAsyncLifetime
             Assert.Equal(TrackStatus.Active, track.Status);
             Assert.Equal(2, track.ObservationCount);
             Assert.Equal("Полтавська область", await db.Places.Where(p => p.PlaceId == track.LastLocationPlaceId).Select(p => p.Name).SingleAsync());
-            Assert.NotNull(track.TrackGeometry);
+            Assert.Null(track.TrackGeometry); // two adjacent oblasts overlap: a line between their centres is not a route
             Assert.Equal(2, await db.ThreatTrackRevisions.CountAsync(r => r.ThreatTrackId == track.ThreatTrackId));
             Assert.Equal(2, await db.ThreatTrackObservations.CountAsync());
             Assert.Equal(ProcessingStatus.Processed, (await db.RawMessages.FindAsync(first.RawMessageId))!.ProcessingStatus);

@@ -30,6 +30,10 @@ public static class EndpointRouteBuilderExtensions
         api.MapGet("/observations", async (DateTimeOffset? since, DateTimeOffset? until, int? limit, SnapshotService snapshots, TimeProvider clock, CancellationToken ct) =>
             await snapshots.RecentObservationsAsync(since ?? clock.GetUtcNow().AddHours(-6), until, limit ?? 300, ct));
 
+        // Alert history of one place (the region window: current alert, last one, count and total time over 24 h).
+        api.MapGet("/alerts/history", async (int placeId, double? hours, SnapshotService snapshots, CancellationToken ct) =>
+            await snapshots.AlertHistoryAsync(placeId, hours ?? 24, ct));
+
         api.MapGet("/timeline", async (DateTimeOffset? from, DateTimeOffset? to, int? bucketMinutes, SnapshotService snapshots, TimeProvider clock, CancellationToken ct) =>
         {
             var end = to ?? clock.GetUtcNow();

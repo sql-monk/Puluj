@@ -95,9 +95,11 @@ public sealed class IndexProvider(IDbContextFactory<PulujDbContext> factory, ILo
     public static async Task<GazetteerIndex> LoadGazetteerAsync(PulujDbContext db, CancellationToken ct)
     {
         var rows = await db.Places.AsNoTracking()
-            .Select(p => new { p.PlaceId, p.Name, p.Level, p.ParentId, p.CountryCode, p.Population, p.Centroid, p.RadiusKm, p.NameVariants })
+            .Select(p => new { p.PlaceId, p.Name, p.Level, p.ParentId, p.CountryCode, p.Population, p.Centroid, p.RadiusKm, p.NameVariants, p.Geometry })
             .ToListAsync(ct);
+        // Only areal geometries are kept as boundaries; settlements are points and their centroid already says it all.
         return new GazetteerIndex(rows.Select(r =>
-            (new PlaceEntry(r.PlaceId, r.Name, r.Level, r.ParentId, r.CountryCode, r.Population ?? 0, r.Centroid, r.RadiusKm), r.NameVariants)));
+            (new PlaceEntry(r.PlaceId, r.Name, r.Level, r.ParentId, r.CountryCode, r.Population ?? 0, r.Centroid, r.RadiusKm,
+                r.Geometry is NetTopologySuite.Geometries.IPolygonal ? r.Geometry : null), r.NameVariants)));
     }
 }

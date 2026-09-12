@@ -1,24 +1,15 @@
 import destination from '@turf/destination'
+import distance from '@turf/distance'
 import { point } from '@turf/helpers'
 import type { Feature, FeatureCollection, GeoJsonProperties, Geometry, LineString, Point, Polygon, MultiPolygon, Position } from 'geojson'
-import type { AlertDto, AlertLevel, RegionDto, TrackDto } from '../api/types'
-import { fadeOpacity } from '../eta/computeEta'
+import type { AlertDto, AlertLevel, Confidence, RegionDto, TrackDto } from '../api/types'
+import { computeEta, distanceToRegionKm, type Home } from '../eta/computeEta'
 import { displayModeEnabled, type Filters } from '../store/useStore'
 
-export const colors: Record<string, string> = {
-  uav: '#f59e0b',
-  cruise: '#ef4444',
-  ballistic: '#a855f7',
-  aircraft: '#3b82f6',
-}
+import { getPalette, type MapPalette } from './palette'
 
-/** Saturated variants for the movement vectors (path + forecast + arrowhead): they must read at a glance over any fill. */
-export const vectorColors: Record<string, string> = {
-  uav: '#ffd400',
-  cruise: '#ff2d2d',
-  ballistic: '#e040fb',
-  aircraft: '#00c2ff',
-}
+/** Why a track is highlighted for the viewer's own point: it is close by, or it is heading this way. */
+export type ThreatKind = 'near' | 'towards' | ''
 
 export interface TrackProps {
   id: number
@@ -32,49 +23,131 @@ export interface TrackProps {
   hasDirection: boolean
   status: string
   kind: string
+  /** Position is an approach-zone anchor ("на Конотоп"), not a fix. */
+  approx: boolean
   ageMin: number
+  /** Independent sources behind the track (badge). */
+  sources: number
+  /** Objects in the group when the report counted more than one (badge), else 0. */
+  count: number
+  threat: ThreatKind
+  selected: boolean
+  /** Reported in the same message as the selected target. */
+  neighbor: boolean
+}
+
+/** A crumb: where the target was reported earlier, with the time; or the dotted link between crumbs. */
+export interface FixProps {
+  id: number
+  mode: string
+  vector: string
+  /** "Ромни 21:40" — the place (if known) and the time of that report. */
+  label: string
+  opacity: number
+  approach: boolean
+  selected: boolean
 }
 
 export interface TrackLayers {
   points: FeatureCollection<Point, TrackProps>
-  paths: FeatureCollection<LineString, TrackProps>
-  forecasts: FeatureCollection<LineString | Point, TrackProps>
+  /** Crumbs (points) and the dotted links from crumb to crumb to the marker. */
+  fixes: FeatureCollection<Point | LineString, FixProps>
+  /** Dashed forecast centreline, hatched probability cone and the chevron at its end. */
+  forecasts: FeatureCollection<LineString | Point | Polygon, TrackProps>
   areas: FeatureCollection<Polygon | MultiPolygon, TrackProps>
 }
 
-const FORECAST_MINUTES = 30
-const DEFAULT_FORECAST_KM = 100
+/** The forecast reaches this far ahead: a short pointer, not a flight plan. */
+const FORECAST_MINUTES = 6
+const MIN_FORECAST_KM = 8
+const DEFAULT_FORECAST_KM = 20
+/** The tail shows at most this much of the observed path behind the marker, and at most TAIL_SEGMENTS legs. */
+export const TAIL_MAX_KM = 25
+export const TAIL_SEGMENTS = 3
+/** Half-angle of the forecast cone by confidence in the reported course. */
+const CONE_HALF_ANGLE: Record<Confidence, number> = { Confirmed: 10, High: 12, Medium: 18, Low: 28, Unknown: 28 }
+/** A track this close to the viewer's point counts as "near" regardless of its course. */
+const NEAR_KM = 25
+
+export interface TrackLayerOptions {
+  home?: Home | null
+  selectedId?: number | null
+  /** Theme palette; the light one when omitted. */
+  palette?: MapPalette
+}
+
+/** Tracks that pass the class, status and source filters and are not fully faded. */
+/** Minutes since the track's last message (never negative). */
+export function ageMinutes(t: TrackDto, now: Date): number {
+  return Math.max(0, (now.getTime() - new Date(t.lastSeenAt).getTime()) / 60000)
+}
 
 export function visibleTracks(tracks: Record<number, TrackDto>, filters: Filters, now: Date): TrackDto[] {
   return Object.values(tracks).filter((t) => {
     if (!displayModeEnabled(t.threat.displayMode, filters)) return false
     if (filters.activeOnly && t.status !== 'Active') return false
-    // Even closed tracks disappear once fully faded.
-    return fadeOpacity(t.lastSeenAt, t.threat.fadeMinutes, now) > 0 || t.status === 'Active'
+    if (filters.sources !== null && !t.sourceIds.some((id) => filters.sources!.includes(id))) return false
+    // A target lives on the map for the viewer's chosen time after its last message, whatever its status.
+    return ageMinutes(t, now) <= filters.lifetimeMinutes
   })
 }
 
-export function buildTrackLayers(tracks: TrackDto[], now: Date, regionsById: Map<number, RegionDto>): TrackLayers {
+/**
+ * Is the track close to the viewer's point, or plausibly heading towards it? Pure, per track: cheap enough per render.
+ * "Near" for a region-level report means the point lies inside that region (its polygon, when known): the region's
+ * covering radius would otherwise call a whole neighbouring oblast "near".
+ */
+export function threatKind(t: TrackDto, home: Home, now: Date, regionsById?: Map<number, RegionDto>): ThreatKind {
+  const loc = t.lastLocation
+  if (!loc?.point || t.status !== 'Active') return ''
+  const km = distance(point(loc.point.coordinates), point([home.lon, home.lat]), { units: 'kilometers' })
+  let near: boolean
+  if (loc.kind === 'Region' || loc.kind === 'Area') {
+    // Inside the region, or within NEAR_KM of its edge (Kyiv city is a hole in the Kyiv oblast polygon).
+    const region = loc.placeId ? regionsById?.get(loc.placeId) : undefined
+    const edge = region ? distanceToRegionKm(home, region.geometry) : null
+    near = edge !== null ? edge <= NEAR_KM : km <= NEAR_KM
+  } else {
+    near = km <= NEAR_KM + Math.min(loc.accuracyKm ?? 0, NEAR_KM)
+  }
+  if (near) return 'near'
+  const eta = computeEta(t, home, now, regionsById)
+  return eta.kind === 'range' || eta.kind === 'imminent' ? 'towards' : ''
+}
+
+export function buildTrackLayers(tracks: TrackDto[], now: Date, regionsById: Map<number, RegionDto>, filters: Filters, opts: TrackLayerOptions = {}): TrackLayers {
   const points: Feature<Point, TrackProps>[] = []
-  const paths: Feature<LineString, TrackProps>[] = []
-  const forecasts: Feature<LineString | Point, TrackProps>[] = []
+  const fixes: Feature<Point | LineString, FixProps>[] = []
+  const forecasts: Feature<LineString | Point | Polygon, TrackProps>[] = []
   const areas: Feature<Polygon | MultiPolygon, TrackProps>[] = []
+  const home = filters.threats ? (opts.home ?? null) : null
+  const palette = opts.palette ?? getPalette('light')
+  // Targets listed in the same message as the selected one light up with it.
+  const selectedTrack = opts.selectedId == null ? undefined : tracks.find((t) => t.id === opts.selectedId)
+  const selectedMessages = new Set(selectedTrack?.messageIds ?? [])
 
   for (const t of tracks) {
-    // Active tracks never fade below 0.45: a faint marker is unreadable, and the age is written on the card anyway.
-    const opacity = t.status === 'Active' ? Math.max(0.45, fadeOpacity(t.lastSeenAt, t.threat.fadeMinutes, now)) : 0.25
+    // Fades over the viewer's lifetime setting, never below 0.45: a faint marker is unreadable, and the age is on the card.
+    const opacity = t.status === 'Active' ? Math.max(0.45, 1 - 0.55 * (ageMinutes(t, now) / Math.max(1, filters.lifetimeMinutes))) : 0.25
+    const selected = opts.selectedId === t.id
     const props: TrackProps = {
       id: t.id,
       label: t.threat.label,
       mode: t.threat.displayMode,
-      color: colors[t.threat.displayMode] ?? colors.uav,
-      vector: vectorColors[t.threat.displayMode] ?? vectorColors.uav,
+      color: palette.marker[t.threat.displayMode] ?? palette.marker.uav,
+      vector: palette.vector[t.threat.displayMode] ?? palette.vector.uav,
       opacity,
       rotation: t.direction?.degrees ?? 0,
       hasDirection: !!t.direction,
       status: t.status,
       kind: t.lastLocation?.kind ?? 'Unknown',
+      approx: t.lastLocation?.kind === 'DirectionOnly',
       ageMin: Math.round((now.getTime() - new Date(t.lastSeenAt).getTime()) / 60000),
+      sources: Math.max(t.distinctSourceCount, t.sourceIds.length),
+      count: t.objectCount && t.objectCount > 1 ? t.objectCount : 0,
+      threat: home ? threatKind(t, home, now, regionsById) : '',
+      selected,
+      neighbor: !selected && selectedMessages.size > 0 && t.messageIds.some((m) => selectedMessages.has(m)),
     }
     const loc = t.lastLocation
     if (loc?.point) {
@@ -88,31 +161,53 @@ export function buildTrackLayers(tracks: TrackDto[], now: Date, regionsById: Map
         }
       }
 
-      // Forecast corridor: reported direction projected for 30 minutes at the class speed (dashed, clearly "forecast").
-      if (t.direction && t.threat.displayMode !== 'ballistic' && t.status === 'Active') {
+      // Forecast: reported course projected a few minutes ahead at the class speed. Dashed centreline (clearly "forecast")
+      // inside a hatched cone whose width says how sure the course is; chevron at the end for the heading.
+      if (filters.forecast && t.direction && t.threat.displayMode !== 'ballistic' && t.status === 'Active') {
         const speed = t.threat.speedProfile.maxKmh
-        const km = speed ? (speed * FORECAST_MINUTES) / 60 : DEFAULT_FORECAST_KM
-        const end = destination(point(loc.point.coordinates), km, t.direction.degrees, { units: 'kilometers' })
-        forecasts.push({
-          type: 'Feature',
-          id: t.id,
-          geometry: { type: 'LineString', coordinates: [loc.point.coordinates, end.geometry.coordinates] },
-          properties: props,
-        })
-        // Arrowhead at the end of the corridor so the course reads at a glance.
+        const km = speed ? Math.max(MIN_FORECAST_KM, (speed * FORECAST_MINUTES) / 60) : DEFAULT_FORECAST_KM
+        const origin = loc.point.coordinates
+        const end = destination(point(origin), km, t.direction.degrees, { units: 'kilometers' })
+        forecasts.push({ type: 'Feature', id: t.id, geometry: cone(origin, km, t.direction.degrees, CONE_HALF_ANGLE[t.direction.confidence]), properties: props })
+        forecasts.push({ type: 'Feature', id: t.id, geometry: { type: 'LineString', coordinates: [origin, end.geometry.coordinates] }, properties: props })
         forecasts.push({ type: 'Feature', id: t.id, geometry: end.geometry, properties: props })
       }
     }
-    if (t.trackGeometry && t.trackGeometry.coordinates.length >= 2) {
-      paths.push({ type: 'Feature', id: t.id, geometry: t.trackGeometry, properties: props })
+    // Crumbs: the earlier reported positions, each with its time, linked by a dotted line up to the marker.
+    // Shown for the selected target, or for every target when the viewer asks for it.
+    if ((selected || filters.crumbs) && loc?.point && t.fixes.length >= 2) {
+      const previous = t.fixes.slice(0, -1)
+      const chain: Position[] = [...previous.map((f) => f.point.coordinates), loc.point.coordinates]
+      previous.forEach((f, i) => {
+        const rank = previous.length - i // 1 = the most recent crumb
+        const time = new Date(f.at).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' })
+        fixes.push({
+          type: 'Feature',
+          id: t.id * 10 + i,
+          geometry: f.point,
+          properties: { id: t.id, mode: props.mode, vector: props.vector, label: `${f.approach ? '→ ' : ''}${f.placeName ?? ''} ${time}`.trim(), opacity: Math.max(0.35, 0.85 - 0.2 * (rank - 1)), approach: f.approach, selected },
+        })
+      })
+      fixes.push({ type: 'Feature', id: t.id, geometry: { type: 'LineString', coordinates: chain }, properties: { id: t.id, mode: props.mode, vector: props.vector, label: '', opacity: 0.7, approach: false, selected } })
     }
   }
   return {
     points: { type: 'FeatureCollection', features: points },
-    paths: { type: 'FeatureCollection', features: paths },
+    fixes: { type: 'FeatureCollection', features: fixes },
     forecasts: { type: 'FeatureCollection', features: forecasts },
     areas: { type: 'FeatureCollection', features: areas },
   }
+}
+
+/** Sector of a circle: where the object may be after the forecast period if it holds roughly the reported course. */
+function cone(origin: Position, km: number, bearing: number, halfAngle: number, steps = 8): Polygon {
+  const ring: Position[] = [origin]
+  for (let i = 0; i <= steps; i++) {
+    const b = bearing - halfAngle + (2 * halfAngle * i) / steps
+    ring.push(destination(point(origin), km, b, { units: 'kilometers' }).geometry.coordinates)
+  }
+  ring.push(origin)
+  return { type: 'Polygon', coordinates: [ring] }
 }
 
 export interface AlertProps {

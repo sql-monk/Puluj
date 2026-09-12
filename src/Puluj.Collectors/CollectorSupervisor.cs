@@ -142,7 +142,7 @@ public sealed class CollectorSupervisor(
     private static string Json<T>(T value) => System.Text.Json.JsonSerializer.Serialize(value);
 
     private static string Signature(IEnumerable<Source> sources) =>
-        string.Join("|", sources.OrderBy(s => s.SourceId).Select(s => $"{s.SourceId}:{s.Config?.RootElement.GetRawText()}:{s.PollingInterval}"));
+        string.Join("|", sources.OrderBy(s => s.SourceId).Select(s => $"{s.SourceId}:{s.Config?.RootElement.GetRawText()}:{s.Secrets?.RootElement.GetRawText()}:{s.PollingInterval}"));
 
     private async Task SuperviseAsync(ICollector collector, IReadOnlyList<Source> sources, CancellationToken ct)
     {

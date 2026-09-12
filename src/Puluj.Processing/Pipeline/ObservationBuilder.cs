@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using NetTopologySuite.Geometries;
 using Puluj.Domain.Entities;
 using Puluj.Domain.Enums;
 using Puluj.Infrastructure.Persistence;
@@ -92,11 +93,25 @@ public sealed class ObservationBuilder(IIndexes indexes)
             obs.DirectionKind = dir.Kind;
             obs.DirectionConfidence = Min(ConfidenceLevel.High, trustCap);
         }
-        else if (fact.Destination is { } dest && located is not null && dest.Place.PlaceId != located.Place.PlaceId)
+        else if (fact.Destination is { } dest && located is not null && dest.Place.PlaceId != located.Place.PlaceId
+                 && DestinationInside(dest.Place, located.Place) && gazetteer.ApproachBearingTo(dest.Place.Centroid.Coordinate) is double approach)
+        {
+            // "Київ: БпЛА курсом на Троєщину" — the district is inside the city, so a bearing from the city centre says
+            // nothing. The object is on the approach to the district, coming in from the hostile side.
+            var anchor = ApproachAnchor(dest.Place, approach);
+            obs.Location = anchor.Point;
+            obs.LocationKind = LocationKind.DirectionOnly;
+            obs.LocationPlaceId = dest.Place.PlaceId;
+            obs.LocationAccuracyKm = anchor.AccuracyKm;
+            obs.DirectionDeg = approach;
+            obs.DirectionKind = DirectionKind.TowardsPlace;
+            obs.DirectionConfidence = Min(ConfidenceLevel.Low, trustCap);
+        }
+        else if (fact.Destination is { } dest2 && located is not null && dest2.Place.PlaceId != located.Place.PlaceId)
         {
             // Bearing from where the marker is drawn towards the named destination, so the vector on the map always
             // points at the place the text names. From the centre of a coarse area it is only a hint: Low confidence.
-            obs.DirectionDeg = Geo.BearingDeg(located.Place.Centroid.Coordinate, dest.Place.Centroid.Coordinate);
+            obs.DirectionDeg = Geo.BearingDeg(located.Place.Centroid.Coordinate, dest2.Place.Centroid.Coordinate);
             obs.DirectionKind = DirectionKind.TowardsPlace;
             obs.DirectionConfidence = Min(located.Place.RadiusKm <= PreciseKm ? ConfidenceLevel.Medium : ConfidenceLevel.Low, trustCap);
         }
@@ -109,6 +124,18 @@ public sealed class ObservationBuilder(IIndexes indexes)
         obs.ParserMetadata = Metadata(fact, language, gazetteer);
         return obs;
     }
+
+    /// <summary>How far short of the destination the approach anchor sits, km: close enough to read as "almost there".</summary>
+    public const double ApproachKm = 15;
+
+    /// <summary>The destination lies within the area the message locates the object in (a district of the city, a town of the oblast).</summary>
+    public static bool DestinationInside(PlaceEntry destination, PlaceEntry located) =>
+        destination.ParentId == located.PlaceId
+        || (located.RadiusKm > PreciseKm && Geo.DistanceKm(located.Centroid.Coordinate, destination.Centroid.Coordinate) <= located.RadiusKm);
+
+    /// <summary>A point ApproachKm short of the destination along the approach course, with the accuracy that claim deserves.</summary>
+    public static (Point Point, double AccuracyKm) ApproachAnchor(PlaceEntry destination, double approachBearing) =>
+        (Geo.Offset(destination.Centroid.Coordinate, (approachBearing + 180) % 360, ApproachKm), Math.Max(ApproachKm, destination.RadiusKm));
 
     /// <summary>Typical half-extent of a raion, used when a raion is named but only its town is in the gazetteer.</summary>
     private const double RaionKm = 25;

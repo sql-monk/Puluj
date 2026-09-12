@@ -20,6 +20,10 @@ public sealed record LocationDto(string Kind, int? PlaceId, string? PlaceName, i
 
 public sealed record DirectionDto(double Degrees, string Kind, string Confidence);
 
+/// <summary>One earlier reported position of a track ("was near Romny at 21:40"): the crumbs drawn behind the marker.</summary>
+/// <param name="Approach">The report only named a destination: the point is that place, the object was on the way to it.</param>
+public sealed record FixDto(DateTimeOffset At, string? PlaceName, string Kind, Point Point, double? AccuracyKm, bool Approach);
+
 public sealed record TrackDto(
     long Id,
     string Status,
@@ -35,7 +39,12 @@ public sealed record TrackDto(
     DirectionDto? Direction,
     int? ObjectCount,
     int ObservationCount,
-    int DistinctSourceCount);
+    int DistinctSourceCount,
+    IReadOnlyList<int> SourceIds,
+    /// <summary>The last few distinct reported positions, oldest first, the current one last.</summary>
+    IReadOnlyList<FixDto> Fixes,
+    /// <summary>Raw messages behind the newest observations: tracks sharing one are "neighbours by message".</summary>
+    IReadOnlyList<long> MessageIds);
 
 /// <param name="Level">Unknown | Yellow | Red (regional administrations publish levels; alerts.in.ua does not).</param>
 /// <param name="Location">Where to draw it when the place has no polygon (raion towns): point + radius.</param>
@@ -68,7 +77,8 @@ public sealed record ObservationDto(
     long? DuplicateOfObservationId,
     double? AssociationConfidence,
     SourceDto Source,
-    RawMessageDto RawMessage);
+    RawMessageDto RawMessage,
+    long? TrackId);
 
 public sealed record TrackDetailsDto(TrackDto Track, IReadOnlyList<ObservationDto> Observations);
 

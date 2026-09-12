@@ -71,7 +71,7 @@ export default function SettingsPage({ onClose }: Props) {
     }
   }
 
-  const props: TabProps = { status, draft, change, s, notify: setMessage, reload: load }
+  const props: TabProps = { status, draft, change, s, notify: setMessage, reload: load, sources }
 
   return (
     <div className="pointer-events-auto absolute inset-0 z-40 flex flex-col bg-slate-100 dark:bg-slate-950 dark:text-slate-100">
@@ -158,14 +158,28 @@ interface TabProps {
   s: (key: string) => SettingDto | undefined
   notify: (m: { ok: boolean; text: string }) => void
   reload: () => Promise<void>
+  sources: AdminSourceDto[]
 }
 
-function AlertsSection({ status, draft, change, s, notify }: TabProps) {
+function AlertsSection({ status, draft, change, s, notify, reload, sources }: TabProps) {
   const [testing, setTesting] = useState(false)
+  const [token, setToken] = useState('')
+  const source = sources.find((x) => x.code === 'alerts_in_ua')
+  const saveToken = async () => {
+    if (!source || !token.trim()) return
+    try {
+      await admin.updateSource(source.id, { token: token.trim() })
+      setToken('')
+      notify({ ok: true, text: 'Токен збережено на джерелі alerts.in.ua.' })
+      await reload()
+    } catch (e) {
+      notify({ ok: false, text: (e as Error).message })
+    }
+  }
   const test = async () => {
     setTesting(true)
     try {
-      const r = await admin.testAlerts(draft['Collectors:AlertsInUa:Token'] || undefined)
+      const r = await admin.testAlerts(token.trim() || undefined)
       notify({ ok: r.ok, text: `alerts.in.ua: ${r.message}` })
     } catch (e) {
       notify({ ok: false, text: (e as Error).message })
@@ -175,12 +189,21 @@ function AlertsSection({ status, draft, change, s, notify }: TabProps) {
   }
   return (
     <Section title="alerts.in.ua" badge={<Badge ok={status?.alertsConfigured ?? null} text={status?.alertsConfigured ? 'налаштовано' : 'не налаштовано'} />}>
-      <p className="text-xs text-slate-500">Офіційні повітряні тривоги по областях. Токен видається за запитом на alerts.in.ua/api-request. Опитування кожні 30 с (змінюється у джерелі «alerts.in.ua» на вкладці Джерела).</p>
+      <p className="text-xs text-slate-500">Офіційні повітряні тривоги по областях. Токен видається за запитом на alerts.in.ua/api-request і зберігається на джерелі «alerts.in.ua» у базі (як і інтервал опитування — вкладка Джерела).</p>
       <Toggle label="Увімкнути" setting={s('Collectors:AlertsInUa:Enabled')} draft={draft} onChange={change} />
-      <Field label="Токен API" setting={s('Collectors:AlertsInUa:Token')} draft={draft} onChange={change} type="password" />
-      <button className="rounded border border-slate-300 px-3 py-1 text-xs dark:border-slate-600" onClick={() => void test()} disabled={testing}>
-        {testing ? 'Перевіряю…' : 'Перевірити токен'}
-      </button>
+      <label className="block text-sm">
+        <span className="text-slate-600 dark:text-slate-300">Токен API {source?.hasToken ? '(збережено — введіть новий, щоб замінити)' : '(не задано)'}</span>
+        <input className="mt-1 w-full rounded border border-slate-300 px-2 py-1 font-mono dark:border-slate-600 dark:bg-slate-800" type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} placeholder={source?.hasToken ? '••••••••' : ''} />
+      </label>
+      <div className="flex gap-2">
+        <button className="rounded bg-slate-800 px-3 py-1 text-xs text-white disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900" onClick={() => void saveToken()} disabled={!token.trim() || !source}>
+          Зберегти токен
+        </button>
+        <button className="rounded border border-slate-300 px-3 py-1 text-xs dark:border-slate-600" onClick={() => void test()} disabled={testing}>
+          {testing ? 'Перевіряю…' : token.trim() ? 'Перевірити введений токен' : 'Перевірити збережений токен'}
+        </button>
+      </div>
+      {!source && <p className="text-xs text-amber-700">Джерела «alerts.in.ua» немає в базі: додайте його на вкладці Джерела (тип REST API, код alerts_in_ua).</p>}
     </Section>
   )
 }

@@ -7,10 +7,11 @@ public sealed record SettingsUpdateRequest(Dictionary<string, string?> Values);
 
 public sealed record AdminSourceDto(
     int Id, string Code, string Name, string Type, bool Enabled, double TrustLevel, int Priority, string? Url, string? Channel,
-    int? PollingIntervalSeconds, string? HomeRegion, long RawMessageCount,
+    int? PollingIntervalSeconds, string? HomeRegion, bool HasToken, long RawMessageCount,
     DateTimeOffset? LastSuccessAt, DateTimeOffset? LastMessageAt, int ConsecutiveFailures, string? LastError, string Status);
 
-public sealed record SourceUpdateRequest(bool? Enabled, double? TrustLevel, string? Name, int? Priority, int? PollingIntervalSeconds, string? Channel, string? Url, string? HomeRegion);
+/// <param name="Token">API token stored on the source (write-only: the DTO only says whether one is set). Empty string removes it.</param>
+public sealed record SourceUpdateRequest(bool? Enabled, double? TrustLevel, string? Name, int? Priority, int? PollingIntervalSeconds, string? Channel, string? Url, string? HomeRegion, string? Token);
 
 public sealed record SourceCreateRequest(string Name, string Type, string? Channel, string? Url, double? TrustLevel, int? Priority, int? PollingIntervalSeconds);
 

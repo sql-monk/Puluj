@@ -26,6 +26,9 @@ function track(overrides: Partial<TrackDto> = {}): TrackDto {
     firstSeenAt: '2026-09-11T01:00:00Z',
     lastSeenAt: '2026-09-11T01:35:00Z',
     updatedAt: '2026-09-11T01:35:00Z',
+    sourceIds: [1],
+    fixes: [],
+    messageIds: [],
     // Chernihiv region centroid, ~150 km NNE of Kyiv, heading SW.
     lastLocation: { kind: 'Region', placeId: 1, placeName: 'Чернігівська область', point: { type: 'Point', coordinates: [31.9, 51.4] }, accuracyKm: 40 },
     direction: { degrees: 225, kind: 'Compass', confidence: 'High' },
@@ -101,5 +104,29 @@ describe('angleDiffDeg', () => {
   it('wraps around', () => {
     expect(angleDiffDeg(350, 10)).toBe(20)
     expect(angleDiffDeg(0, 180)).toBe(180)
+  })
+})
+
+describe('region polygons', () => {
+  // A square oblast ~110 km across whose covering radius would cover the viewer, who is 55 km outside its edge.
+  const region = {
+    id: 1,
+    name: 'Область',
+    level: 'Region',
+    countryCode: 'UA',
+    geometry: { type: 'Polygon' as const, coordinates: [[[31.4, 50.9], [32.9, 50.9], [32.9, 51.9], [31.4, 51.9], [31.4, 50.9]]] },
+  }
+  const regions = new Map([[1, region]])
+  const nearby = { lon: 32.0, lat: 50.4 }
+
+  it('measures the distance to the edge, zero inside', () => {
+    // Without the polygon the covering radius alone says "could be here already".
+    const coarse = track({ direction: undefined, lastLocation: { kind: 'Region', placeId: 1, placeName: 'Область', point: { type: 'Point', coordinates: [32.15, 51.4] }, accuracyKm: 80 } })
+    expect(computeEta(coarse, nearby, NOW).kind).toBe('imminent')
+    const eta = computeEta(coarse, nearby, NOW, regions)
+    expect(eta.kind).toBe('range')
+    if (eta.kind === 'range') expect(eta.minMinutes).toBeGreaterThanOrEqual(10)
+    const inside = computeEta(coarse, { lon: 32.0, lat: 51.2 }, NOW, regions)
+    expect(inside.kind).toBe('imminent')
   })
 })

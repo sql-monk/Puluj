@@ -22,7 +22,8 @@ public sealed class GazetteerSeeder(SeedFiles files, IOptions<SeedOptions> optio
     public int Order => 30;
 
     private const double SimplifyToleranceDeg = 0.002; // ~200 m; keeps oblast polygons small enough for the API
-    private const int MinPopulation = 500;
+    /// <summary>Every GeoNames populated place is imported (the full settlement list); the matcher demands a cue word for small ones.</summary>
+    private const int MinPopulation = 0;
 
     private static readonly JsonSerializerOptions GeoJson = new()
     {

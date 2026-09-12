@@ -37,9 +37,11 @@ public sealed class AlertsInUaCollector(
     public async Task RunAsync(IReadOnlyList<Source> sources, CancellationToken ct)
     {
         var source = sources[0];
-        if (string.IsNullOrWhiteSpace(options.CurrentValue.Token))
+        // The token lives on the source row (settings page); configuration / env is only the bootstrap fallback.
+        var token = TokenFor(source, options.CurrentValue);
+        if (string.IsNullOrWhiteSpace(token))
         {
-            logger.LogWarning("alerts.in.ua token missing (Collectors:AlertsInUa:Token); collector idle");
+            logger.LogWarning("alerts.in.ua token missing (source secret or Collectors:AlertsInUa:Token); collector idle");
             await Task.Delay(Timeout.InfiniteTimeSpan, ct);
             return;
         }
@@ -53,7 +55,7 @@ public sealed class AlertsInUaCollector(
         {
             try
             {
-                var active = await FetchActiveAsync(ct);
+                var active = await FetchActiveAsync(token, ct);
                 known = await ReconcileAsync(source, known, active, ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -68,11 +70,14 @@ public sealed class AlertsInUaCollector(
         } while (await timer.WaitForNextTickAsync(ct));
     }
 
-    private async Task<Dictionary<string, JsonObject>> FetchActiveAsync(CancellationToken ct)
+    public static string? TokenFor(Source source, AlertsInUaOptions options) =>
+        source.Secret("token") is { Length: > 0 } t ? t : options.Token;
+
+    private async Task<Dictionary<string, JsonObject>> FetchActiveAsync(string token, CancellationToken ct)
     {
         var http = httpFactory.CreateClient(HttpClientName);
         http.BaseAddress = new Uri(options.CurrentValue.BaseUrl);
-        http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", options.CurrentValue.Token);
+        http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         var doc = await http.GetFromJsonAsync<JsonObject>("v1/alerts/active.json", ct)
                   ?? throw new InvalidOperationException("Empty response");
         var result = new Dictionary<string, JsonObject>();

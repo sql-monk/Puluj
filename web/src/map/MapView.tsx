@@ -3,11 +3,15 @@ import type { MapLayerMouseEvent } from 'maplibre-gl'
 // maplibre-gl v6 resolves its worker with a dynamic `new URL(...)` that bundlers cannot follow; Vite bundles the
 // worker entry explicitly here and MapLibre is pointed at it.
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { RegionDto } from '../api/types'
-import { effectiveNow, useStore } from '../store/useStore'
+import type { MapPalette } from './palette'
+import RegionPopup from '../components/RegionPopup'
+import TrackPopup from '../components/TrackPopup'
+import { effectiveNow, useStore, type Theme } from '../store/useStore'
+import { getPalette } from './palette'
 import { buildAlertLayer, buildTrackLayers, emptyCollection, isPolygonAlert, visibleTracks } from './geojson'
-import { ATTRIBUTION, STYLE_DARK, STYLE_LIGHT, addIcons, addTrackLayers, addTrackSources, alertPaint, pointerCursor, setData, trackAt } from './layers'
+import { ATTRIBUTION, STYLE_DARK, STYLE_LIGHT, TRACK_HIT_LAYERS, addIcons, addTrackLayers, addTrackSources, alertPaint, pointerCursor, setData, setTrackData, trackAt } from './layers'
 
 maplibregl.setWorkerUrl(maplibreWorkerUrl)
 
@@ -15,18 +19,26 @@ const UKRAINE_CENTER: [number, number] = [31.2, 48.8]
 
 interface Props {
   dark: boolean
+  theme: Theme
   onPickHome: ((lon: number, lat: number) => void) | null
+  onDetails: (trackId: number) => void
 }
 
 /** Country-wide MapLibre map with all Puluj layers. Data flows one way: store -> GeoJSON sources. */
-export default function MapView({ dark, onPickHome }: Props) {
+export default function MapView({ dark, theme, onPickHome, onDetails }: Props) {
   const container = useRef<HTMLDivElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
+  const [mapInstance, setMapInstance] = useState<maplibregl.Map | null>(null)
+  // Where the viewer clicked to select the current track: the popup opens there, not at the marker.
+  const [clickAt, setClickAt] = useState<[number, number] | null>(null)
   const styleLoaded = useRef(false)
   const pickRef = useRef(onPickHome)
   pickRef.current = onPickHome
-  const darkRef = useRef(dark)
-  darkRef.current = dark
+  const palette = getPalette(theme)
+  const paletteRef = useRef(palette)
+  paletteRef.current = palette
+  // Where the viewer clicked to select a region: the region window opens there.
+  const [regionClickAt, setRegionClickAt] = useState<[number, number] | null>(null)
 
   const tracks = useStore((s) => s.tracks)
   const alerts = useStore((s) => s.alerts)
@@ -37,6 +49,8 @@ export default function MapView({ dark, onPickHome }: Props) {
   const at = useStore((s) => s.at)
   const now = useStore((s) => s.now)
   const select = useStore((s) => s.select)
+  const selectedTrackId = useStore((s) => s.selectedTrackId)
+  const selectedTrack = useStore((s) => (s.selectedTrackId ? s.tracks[s.selectedTrackId] : undefined))
   const selectedRegionId = useStore((s) => s.selectedRegionId)
   const selectRegion = useStore((s) => s.selectRegion)
   const clock = effectiveNow({ mode, at, now })
@@ -55,8 +69,8 @@ export default function MapView({ dark, onPickHome }: Props) {
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right')
     map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left')
     map.on('style.load', () => {
-      addIcons(map)
-      addLayers(map, darkRef.current)
+      addIcons(map, paletteRef.current)
+      addLayers(map, paletteRef.current)
       styleLoaded.current = true
     })
     map.on('click', (e: MapLayerMouseEvent) => {
@@ -66,33 +80,38 @@ export default function MapView({ dark, onPickHome }: Props) {
       }
       const trackId = trackAt(map, e.point)
       select(trackId)
-      if (trackId !== null && map.queryRenderedFeatures(e.point, { layers: ['track-points', 'track-paths'] }).length > 0) return
+      setClickAt(trackId === null ? null : [e.lngLat.lng, e.lngLat.lat])
+      setRegionClickAt(trackId === null ? [e.lngLat.lng, e.lngLat.lat] : null)
+      if (trackId !== null) return
       // No marker under the cursor: (de)select the oblast for the feed filter and outline highlight.
       const ob = map.queryRenderedFeatures(e.point, { layers: ['alerts-fill', 'oblasts-fill'] })[0]
       const regionId = ob?.layer.id === 'alerts-fill' ? ob.properties?.placeId : ob?.properties?.id
       selectRegion(regionId === undefined ? null : Number(regionId))
     })
-    pointerCursor(map, ['track-points', 'track-areas', 'oblasts-fill', 'alerts-fill'])
+    pointerCursor(map, [...TRACK_HIT_LAYERS, 'oblasts-fill', 'alerts-fill'])
     map.on('error', (e) => console.error('[map]', e.error?.message ?? e))
     if (import.meta.env.DEV) Object.assign(window, { __map: map, __maplibre: maplibregl })
     mapRef.current = map
+    setMapInstance(map)
     return () => {
       map.remove()
       mapRef.current = null
+      setMapInstance(null)
       styleLoaded.current = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Theme switch: swap the base style, layers are re-added on style.load. Skipped on the initial mount.
-  const appliedDark = useRef(dark)
+  // Theme switch: reload the base style so icons and layers are re-added in the new palette. Skipped on mount.
+  const appliedTheme = useRef(theme)
   useEffect(() => {
     const map = mapRef.current
-    if (!map || appliedDark.current === dark) return
-    appliedDark.current = dark
+    if (!map || appliedTheme.current === theme) return
+    appliedTheme.current = theme
     styleLoaded.current = false
     map.setStyle(dark ? STYLE_DARK : STYLE_LIGHT)
-  }, [dark])
+  }, [theme, dark])
 
   // Crosshair cursor while picking a home point.
   useEffect(() => {
@@ -106,11 +125,7 @@ export default function MapView({ dark, onPickHome }: Props) {
     const apply = () => {
       if (!map.getSource('track-points')) return
       const visible = visibleTracks(tracks, filters, clock)
-      const layers = buildTrackLayers(visible, clock, regionsById)
-      setData(map, 'track-points', layers.points)
-      setData(map, 'track-paths', layers.paths)
-      setData(map, 'track-forecasts', layers.forecasts)
-      setData(map, 'track-areas', layers.areas)
+      setTrackData(map, buildTrackLayers(visible, clock, regionsById, filters, { home, selectedId: selectedTrackId, palette }))
       // An alerted oblast is drawn by the alert layer instead of the base fill, so the colours never blend.
       const alertList = filters.alerts ? Object.values(alerts) : []
       const alerted = new Set(alertList.filter((a) => isPolygonAlert(a, regionsById)).map((a) => a.placeId))
@@ -126,18 +141,20 @@ export default function MapView({ dark, onPickHome }: Props) {
     }
     if (styleLoaded.current) apply()
     else map.once('style.load', apply)
-  }, [tracks, alerts, regions, regionsById, filters, home, clock, selectedRegionId])
+  }, [tracks, alerts, regions, regionsById, filters, home, clock, selectedRegionId, selectedTrackId, palette])
 
   // MapLibre's own (unlayered) CSS sets position on .maplibregl-map and would override Tailwind's layered
   // utilities, so the positioned wrapper is a separate element.
   return (
     <div className="absolute inset-0">
       <div ref={container} className="h-full w-full" />
+      {mapInstance && selectedTrack && <TrackPopup map={mapInstance} track={selectedTrack} anchor={clickAt} onDetails={() => onDetails(selectedTrack.id)} onClose={() => select(null)} />}
+      {mapInstance && !selectedTrack && selectedRegionId !== null && regionClickAt && <RegionPopup map={mapInstance} placeId={selectedRegionId} anchor={regionClickAt} onClose={() => selectRegion(null)} />}
     </div>
   )
 }
 
-function addLayers(map: maplibregl.Map, dark: boolean) {
+function addLayers(map: maplibregl.Map, p: MapPalette) {
   const empty = emptyCollection()
   map.addSource('ukraine', { type: 'geojson', data: empty })
   map.addSource('oblasts', { type: 'geojson', data: empty })
@@ -148,29 +165,29 @@ function addLayers(map: maplibregl.Map, dark: boolean) {
   // These go *under* the basemap's label layers so place names stay readable.
   const firstSymbol = map.getStyle().layers.find((l) => l.type === 'symbol')?.id
   map.addLayer(
-    { id: 'oblasts-fill', type: 'fill', source: 'oblasts', filter: ['!', ['get', 'alerted']], paint: { 'fill-color': dark ? '#1b3149' : '#cfe3f7', 'fill-opacity': 0.7 } },
+    { id: 'oblasts-fill', type: 'fill', source: 'oblasts', filter: ['!', ['get', 'alerted']], paint: { 'fill-color': p.land, 'fill-opacity': 0.7 } },
     firstSymbol,
   )
   map.addLayer(
-    { id: 'oblasts-line', type: 'line', source: 'oblasts', paint: { 'line-color': dark ? '#7fb3e6' : '#5b8fc7', 'line-width': 0.9, 'line-opacity': 0.6 } },
+    { id: 'oblasts-line', type: 'line', source: 'oblasts', paint: { 'line-color': p.oblastLine, 'line-width': 0.9, 'line-opacity': 0.6 } },
     firstSymbol,
   )
-  map.addLayer({ id: 'ukraine-halo', type: 'line', source: 'ukraine', paint: { 'line-color': dark ? '#0b1220' : '#ffffff', 'line-width': 7, 'line-opacity': 0.9 } }, firstSymbol)
+  map.addLayer({ id: 'ukraine-halo', type: 'line', source: 'ukraine', paint: { 'line-color': p.borderHalo, 'line-width': 7, 'line-opacity': 0.9 } }, firstSymbol)
   map.addLayer(
     {
       id: 'ukraine-line',
       type: 'line',
       source: 'ukraine',
       layout: { 'line-join': 'round', 'line-cap': 'round' },
-      paint: { 'line-color': dark ? '#7dd3fc' : '#1e3a8a', 'line-width': 3.2, 'line-opacity': 1 },
+      paint: { 'line-color': p.border, 'line-width': 3.2, 'line-opacity': 1 },
     },
     firstSymbol,
   )
 
   // Air-raid alerts replace (not tint) the oblast fill: same opacity, own colour per level.
-  const alert = alertPaint(dark)
+  const alert = alertPaint(p)
   map.addLayer({ id: 'alerts-fill', type: 'fill', source: 'alerts', paint: { 'fill-color': alert.fill, 'fill-opacity': 0.7 } }, firstSymbol)
   map.addLayer({ id: 'alerts-line', type: 'line', source: 'alerts', paint: { 'line-color': alert.line, 'line-opacity': 0.9, 'line-width': 1.4 } }, firstSymbol)
 
-  addTrackLayers(map, dark)
+  addTrackLayers(map, p)
 }

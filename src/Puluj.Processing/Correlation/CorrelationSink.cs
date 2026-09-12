@@ -26,12 +26,14 @@ public sealed class CorrelationSink(
     public async Task OnObservationsAsync(PulujDbContext db, IReadOnlyList<Observation> observations, Source source, ICollection<PulujEvent> events, CancellationToken ct)
     {
         var now = clock.GetUtcNow();
+        // A message that lists several sightings lists several objects: no two facts from it may share a track.
+        var usedTracks = new HashSet<long>();
         foreach (var o in observations.OrderBy(x => x.ObservedAt))
         {
             switch (o.EventType)
             {
                 case EventType.ThreatObserved when o.ThreatCategoryId is not null:
-                    await HandleThreatAsync(db, o, source, events, now, ct);
+                    await HandleThreatAsync(db, o, source, events, now, usedTracks, ct);
                     break;
                 case EventType.AirRaidAlert or EventType.AlertCancelled:
                     var alert = await db.AirAlerts.AsNoTracking()
@@ -53,7 +55,7 @@ public sealed class CorrelationSink(
         }
     }
 
-    private async Task HandleThreatAsync(PulujDbContext db, Observation o, Source source, ICollection<PulujEvent> events, DateTimeOffset now, CancellationToken ct)
+    private async Task HandleThreatAsync(PulujDbContext db, Observation o, Source source, ICollection<PulujEvent> events, DateTimeOffset now, HashSet<long> usedTracks, CancellationToken ct)
     {
         var duplicateOf = await FindDuplicateAsync(db, o, ct);
         if (duplicateOf is not null)
@@ -76,6 +78,7 @@ public sealed class CorrelationSink(
                     AssociationConfidence = link.AssociationConfidence,
                     AssociationReason = System.Text.Json.JsonDocument.Parse($"{{\"duplicateOf\":{duplicateOf.ObservationId}}}"),
                 });
+                usedTracks.Add(track.ThreatTrackId);
                 await RecountSourcesAsync(db, track, o.SourceId, ct);
                 track.TrackConfidence = TrackUpdater.ComputeTrackConfidence(track, await BestObservationConfidenceAsync(db, track, o, ct));
                 track.UpdatedAt = Later(track.UpdatedAt, o.ObservedAt);
@@ -86,6 +89,17 @@ public sealed class CorrelationSink(
             return;
         }
 
+        // A sighting that names neither a place nor a destination cannot be put on the map, and attaching it to
+        // whichever track is freshest would only corrupt that track's provenance. It stays in the feed.
+        var oAnchor = Correlator.AnchorOf(o, indexes.Gazetteer);
+        if (oAnchor is null)
+        {
+            logger.LogDebug("Observation {Id} has no spatial anchor; no track", o.ObservationId);
+            return;
+        }
+        var destination = o.DestinationPlaceId is int destId ? indexes.Gazetteer.Get(destId) : null;
+        var approach = destination is null ? null : indexes.Gazetteer.ApproachBearingTo(destination.Centroid.Coordinate);
+
         // Candidate window is generous; the per-pair class profile (observation class, else track class) drives the score.
         var since = o.ObservedAt.AddMinutes(-CandidateWindowMinutes);
         var until = o.ObservedAt.AddMinutes(CandidateWindowMinutes);
@@ -95,10 +109,10 @@ public sealed class CorrelationSink(
 
         ThreatTrack? best = null;
         AssociationScore? bestScore = null;
-        foreach (var t in candidates.Where(t => Correlator.ClassCompatible(o, t)))
+        foreach (var t in candidates.Where(t => Correlator.ClassCompatible(o, t) && !usedTracks.Contains(t.ThreatTrackId)))
         {
             var profile = indexes.Taxonomy.ClassProfile(o.ThreatClassId ?? t.ThreatClassId);
-            var score = Correlator.Score(o, t, profile, options.CurrentValue.SlackKm);
+            var score = Correlator.Score(o, t, profile, options.CurrentValue.SlackKm, oAnchor, Correlator.AnchorOf(t, indexes.Gazetteer));
             if (score.Total >= options.CurrentValue.AttachThreshold && (bestScore is null || score.Total > bestScore.Total))
             {
                 best = t;
@@ -108,7 +122,7 @@ public sealed class CorrelationSink(
 
         if (best is null)
         {
-            best = TrackUpdater.CreateTrack(o, now);
+            best = TrackUpdater.CreateTrack(o, now, destination, approach);
             best.DistinctSourceCount = 1;
             best.TrackConfidence = TrackUpdater.ComputeTrackConfidence(best, o.ObservationConfidence);
             db.ThreatTracks.Add(best);
@@ -125,7 +139,7 @@ public sealed class CorrelationSink(
         }
         else
         {
-            TrackUpdater.Apply(best, o, now, isNewer: o.ObservedAt >= best.LastSeenAt);
+            TrackUpdater.Apply(best, o, now, isNewer: o.ObservedAt >= best.LastSeenAt, destination, approach);
             db.ThreatTrackObservations.Add(new ThreatTrackObservation
             {
                 ThreatTrackId = best.ThreatTrackId,
@@ -140,6 +154,7 @@ public sealed class CorrelationSink(
             await db.SaveChangesAsync(ct);
             logger.LogInformation("Observation {Obs} attached to track {Track} (score {Score:F2})", o.ObservationId, best.ThreatTrackId, bestScore.Total);
         }
+        usedTracks.Add(best.ThreatTrackId);
         events.Add(new PulujEvent(PulujEventType.TrackUpserted, best.ThreatTrackId, now));
     }
 
