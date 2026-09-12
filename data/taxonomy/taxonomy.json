@@ -1,0 +1,87 @@
+{
+  "categories": [
+    { "code": "UAV", "name": "БпЛА" },
+    { "code": "MISSILE", "name": "Ракета" },
+    { "code": "AIRCRAFT", "name": "Авіація" },
+    { "code": "GUIDED_BOMB", "name": "Керована авіабомба" },
+    { "code": "UNKNOWN", "name": "Невідома загроза" }
+  ],
+  "classes": [
+    { "code": "STRIKE_UAV", "category": "UAV", "name": "Ударний БпЛА",
+      "metadata": { "speedKmhMin": 150, "speedKmhMax": 200, "etaEnabled": true, "displayMode": "uav", "fadeMinutes": 20, "correlationWindowMinutes": 60 } },
+    { "code": "DECOY_UAV", "category": "UAV", "name": "БпЛА-імітатор",
+      "metadata": { "speedKmhMin": 140, "speedKmhMax": 200, "etaEnabled": true, "displayMode": "uav", "fadeMinutes": 20, "correlationWindowMinutes": 60 } },
+    { "code": "RECON_UAV", "category": "UAV", "name": "Розвідувальний БпЛА",
+      "metadata": { "speedKmhMin": 80, "speedKmhMax": 150, "etaEnabled": false, "displayMode": "uav", "fadeMinutes": 30, "correlationWindowMinutes": 60 } },
+    { "code": "UNKNOWN_UAV", "category": "UAV", "name": "БпЛА (тип невідомий)",
+      "metadata": { "speedKmhMin": 120, "speedKmhMax": 200, "etaEnabled": true, "displayMode": "uav", "fadeMinutes": 20, "correlationWindowMinutes": 60 } },
+
+    { "code": "CRUISE_MISSILE", "category": "MISSILE", "name": "Крилата ракета",
+      "metadata": { "speedKmhMin": 700, "speedKmhMax": 950, "etaEnabled": true, "displayMode": "cruise", "fadeMinutes": 10, "correlationWindowMinutes": 25 } },
+    { "code": "BALLISTIC_MISSILE", "category": "MISSILE", "name": "Балістична ракета",
+      "metadata": { "etaEnabled": false, "displayMode": "ballistic", "fadeMinutes": 10, "correlationWindowMinutes": 10 } },
+    { "code": "AEROBALLISTIC_MISSILE", "category": "MISSILE", "name": "Аеробалістична ракета",
+      "metadata": { "etaEnabled": false, "displayMode": "ballistic", "fadeMinutes": 10, "correlationWindowMinutes": 10 } },
+    { "code": "HYPERSONIC_MISSILE", "category": "MISSILE", "name": "Гіперзвукова ракета",
+      "metadata": { "etaEnabled": false, "displayMode": "ballistic", "fadeMinutes": 10, "correlationWindowMinutes": 10 } },
+    { "code": "UNKNOWN_MISSILE", "category": "MISSILE", "name": "Ракета (тип невідомий)",
+      "metadata": { "etaEnabled": false, "displayMode": "cruise", "fadeMinutes": 10, "correlationWindowMinutes": 20 } },
+
+    { "code": "STRATEGIC_AIRCRAFT", "category": "AIRCRAFT", "name": "Стратегічна авіація",
+      "metadata": { "etaEnabled": false, "displayMode": "aircraft", "fadeMinutes": 60, "correlationWindowMinutes": 120 } },
+    { "code": "TACTICAL_AIRCRAFT", "category": "AIRCRAFT", "name": "Тактична авіація",
+      "metadata": { "etaEnabled": false, "displayMode": "aircraft", "fadeMinutes": 30, "correlationWindowMinutes": 60 } },
+    { "code": "HELICOPTER", "category": "AIRCRAFT", "name": "Гелікоптер",
+      "metadata": { "etaEnabled": false, "displayMode": "aircraft", "fadeMinutes": 30, "correlationWindowMinutes": 60 } },
+
+    { "code": "GLIDE_BOMB", "category": "GUIDED_BOMB", "name": "Керована авіабомба",
+      "metadata": { "etaEnabled": false, "displayMode": "uav", "fadeMinutes": 10, "correlationWindowMinutes": 15 } },
+
+    { "code": "UNKNOWN_THREAT", "category": "UNKNOWN", "name": "Невідомий об'єкт",
+      "metadata": { "etaEnabled": false, "displayMode": "uav", "fadeMinutes": 20, "correlationWindowMinutes": 30 } }
+  ],
+  "families": [
+    { "code": "SHAHED", "class": "STRIKE_UAV", "name": "Shahed family" },
+    { "code": "LANCET", "class": "STRIKE_UAV", "name": "Lancet family" },
+    { "code": "FPV", "class": "STRIKE_UAV", "name": "FPV drones" },
+    { "code": "MOLNIYA", "class": "STRIKE_UAV", "name": "Molniya family" },
+    { "code": "OTHER_STRIKE_UAV", "class": "STRIKE_UAV", "name": "Інший ударний БпЛА" },
+    { "code": "GERBERA", "class": "DECOY_UAV", "name": "Gerbera family" },
+    { "code": "OTHER_DECOY_UAV", "class": "DECOY_UAV", "name": "Інший імітатор" },
+    { "code": "ORLAN", "class": "RECON_UAV", "name": "Orlan family" },
+    { "code": "ZALA", "class": "RECON_UAV", "name": "ZALA family" },
+    { "code": "SUPERCAM", "class": "RECON_UAV", "name": "Supercam family" },
+    { "code": "OTHER_RECON_UAV", "class": "RECON_UAV", "name": "Інший розвідувальний БпЛА" },
+
+    { "code": "KH101", "class": "CRUISE_MISSILE", "name": "Kh-101/555 family" },
+    { "code": "KALIBR", "class": "CRUISE_MISSILE", "name": "Kalibr family" },
+    { "code": "KH59", "class": "CRUISE_MISSILE", "name": "Kh-59/69 family" },
+    { "code": "KH22", "class": "CRUISE_MISSILE", "name": "Kh-22/32 family" },
+    { "code": "ONIKS", "class": "CRUISE_MISSILE", "name": "Oniks family" },
+    { "code": "KH35", "class": "CRUISE_MISSILE", "name": "Kh-35 family" },
+    { "code": "OTHER_CRUISE", "class": "CRUISE_MISSILE", "name": "Інша крилата ракета" },
+
+    { "code": "ISKANDER", "class": "BALLISTIC_MISSILE", "name": "Iskander family" },
+    { "code": "KN", "class": "BALLISTIC_MISSILE", "name": "KN family (DPRK)" },
+    { "code": "TOCHKA", "class": "BALLISTIC_MISSILE", "name": "Tochka family" },
+    { "code": "S300_GROUND", "class": "BALLISTIC_MISSILE", "name": "S-300/S-400 (по наземних цілях)" },
+    { "code": "ORESHNIK", "class": "BALLISTIC_MISSILE", "name": "Oreshnik family" },
+    { "code": "OTHER_BALLISTIC", "class": "BALLISTIC_MISSILE", "name": "Інша балістична ракета" },
+
+    { "code": "KINZHAL", "class": "AEROBALLISTIC_MISSILE", "name": "Kinzhal family" },
+    { "code": "ZIRCON", "class": "HYPERSONIC_MISSILE", "name": "Zircon family" },
+    { "code": "OTHER_MISSILE", "class": "UNKNOWN_MISSILE", "name": "Ракета невідомого типу" },
+
+    { "code": "TU95", "class": "STRATEGIC_AIRCRAFT", "name": "Tu-95 family" },
+    { "code": "TU160", "class": "STRATEGIC_AIRCRAFT", "name": "Tu-160 family" },
+    { "code": "TU22", "class": "STRATEGIC_AIRCRAFT", "name": "Tu-22M family" },
+    { "code": "MIG31", "class": "TACTICAL_AIRCRAFT", "name": "MiG-31 family" },
+    { "code": "SU", "class": "TACTICAL_AIRCRAFT", "name": "Su family" },
+    { "code": "A50", "class": "TACTICAL_AIRCRAFT", "name": "A-50 AEW" },
+    { "code": "KA52", "class": "HELICOPTER", "name": "Ka-52 family" },
+    { "code": "MI", "class": "HELICOPTER", "name": "Mi family" },
+
+    { "code": "KAB", "class": "GLIDE_BOMB", "name": "KAB / UMPK family" },
+    { "code": "UNKNOWN_OBJECT", "class": "UNKNOWN_THREAT", "name": "Невідомий об'єкт" }
+  ]
+}

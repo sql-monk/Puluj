@@ -1,0 +1,50 @@
+services:
+  postgis:
+    image: postgis/postgis:17-3.5
+    environment:
+      POSTGRES_DB: puluj
+      POSTGRES_USER: puluj
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-puluj}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U puluj -d puluj"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.worker
+    env_file: ../.env
+    environment:
+      ConnectionStrings__Puluj: "Host=postgis;Port=5432;Database=puluj;Username=puluj;Password=${POSTGRES_PASSWORD:-puluj}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+    volumes:
+      - tgsession:/app/session
+    depends_on:
+      postgis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+    environment:
+      ConnectionStrings__Puluj: "Host=postgis;Port=5432;Database=puluj;Username=puluj;Password=${POSTGRES_PASSWORD:-puluj}"
+      ASPNETCORE_URLS: http://+:8080
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  tgsession:

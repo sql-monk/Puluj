@@ -1,0 +1,112 @@
+{
+  "_comment": "Golden parser cases. Only the listed fields are asserted; facts are compared in order. Names are Place.Name values from gazetteer-lite.json, threat = code of the deepest identified level.",
+  "cases": [
+    { "id": "ps-01", "text": "БпЛА на Чернігівщині, курсом на Київщину.",
+      "facts": [ { "event": "ThreatObserved", "threat": "UAV", "level": "Category", "current": "Чернігівська область", "destination": "Київська область" } ] },
+
+    { "id": "ps-02", "text": "Ударні БпЛА з Сумщини у південному напрямку.",
+      "facts": [ { "threat": "STRIKE_UAV", "level": "Class", "origin": "Сумська область", "direction": 180 } ] },
+
+    { "id": "ps-03", "text": "Група шахедів на півночі Київщини рухається на захід.",
+      "facts": [ { "threat": "SHAHED", "level": "Family", "count": 3, "approx": true, "current": "Київська область", "quadrant": 0, "direction": 270 } ] },
+
+    { "id": "mon-04", "text": "🛵 Полтавщина: шахеди на Кременчук.",
+      "facts": [ { "threat": "SHAHED", "current": "Полтавська область", "destination": "Кременчук" } ] },
+
+    { "id": "ps-05", "text": "Крилаті ракети через Кіровоградщину курсом на Вінниччину.",
+      "facts": [ { "threat": "CRUISE_MISSILE", "level": "Class", "transit": "Кіровоградська область", "destination": "Вінницька область" } ] },
+
+    { "id": "mon-06", "text": "Пуск балістики з Брянської області!",
+      "facts": [ { "threat": "BALLISTIC_MISSILE", "origin": "Брянська область (РФ)", "launch": true } ] },
+
+    { "id": "mon-07", "text": "Зліт МіГ-31К з аеродрому Саваслейка.",
+      "facts": [ { "threat": "MIG_31K", "level": "Model", "launch": true, "noPlaces": true } ] },
+
+    { "id": "ps-08", "text": "Швидкісна ціль на Дніпропетровщину!",
+      "facts": [ { "threat": "MISSILE", "level": "Category", "destination": "Дніпропетровська область" } ] },
+
+    { "id": "alert-09", "text": "Відбій повітряної тривоги в Київській області.",
+      "facts": [ { "event": "AlertCancelled", "current": "Київська область" } ] },
+
+    { "id": "alert-10", "text": "Повітряна тривога в Харківській області.",
+      "facts": [ { "event": "AirRaidAlert", "current": "Харківська область" } ] },
+
+    { "id": "expl-11", "text": "У Києві чутно вибухи.",
+      "facts": [ { "event": "ExplosionReport", "current": "Київ" } ] },
+
+    { "id": "ps-12", "text": "Загроза застосування балістичного озброєння для Харківщини!",
+      "facts": [ { "threat": "BALLISTIC_MISSILE", "current": "Харківська область" } ] },
+
+    { "id": "mon-13", "text": "Ймовірно Х-101 на Полтавщині.",
+      "facts": [ { "threat": "KH_101", "level": "Model", "hedged": true, "current": "Полтавська область" } ] },
+
+    { "id": "ps-14", "text": "Х-101/555 у напрямку Черкащини.",
+      "facts": [ { "threat": "KH101", "level": "Family", "destination": "Черкаська область" } ] },
+
+    { "id": "ps-15", "text": "Шахеди:\n- на Сумщині, курс західний;\n- на Харківщині у напрямку Полтавщини.",
+      "facts": [
+        { "threat": "SHAHED", "current": "Сумська область", "direction": 270 },
+        { "threat": "SHAHED", "current": "Харківська область", "destination": "Полтавська область" }
+      ] },
+
+    { "id": "mon-16", "text": "Калібри в Чорному морі! Пуск!",
+      "facts": [ { "threat": "KALIBR_3M14", "current": "Чорне море" } ] },
+
+    { "id": "mon-17", "text": "Іскандер-М з Курської області на Сумщину.",
+      "facts": [ { "threat": "ISKANDER_M", "origin": "Курська область (РФ)", "destination": "Сумська область" } ] },
+
+    { "id": "ppo-18", "text": "На Херсонщині працює ППО.",
+      "facts": [ { "event": "AirDefenseActivity", "current": "Херсонська область" } ] },
+
+    { "id": "cancel-19", "text": "Загроза для Миколаєва минула.",
+      "facts": [ { "event": "ThreatCancelled", "current": "Миколаїв" } ] },
+
+    { "id": "mon-20", "text": "Кинджал на Хмельниччину!",
+      "facts": [ { "threat": "KINZHAL", "destination": "Хмельницька область" } ] },
+
+    { "id": "kab-21", "text": "КАБи по Запоріжжю.",
+      "facts": [ { "threat": "KAB", "level": "Family", "current": "Запоріжжя" } ] },
+
+    { "id": "recon-22", "text": "Розвідувальний БпЛА над Одещиною.",
+      "facts": [ { "threat": "RECON_UAV", "current": "Одеська область" } ] },
+
+    { "id": "ps-23", "text": "8 БпЛА курсом на Київ з північного сходу.",
+      "facts": [ { "threat": "UAV", "count": 8, "destination": "Київ", "direction": 225 } ] },
+
+    { "id": "mon-24", "text": "Ту-95МС злетіли з Оленьї.",
+      "facts": [ { "threat": "TU_95MS", "launch": true } ] },
+
+    { "id": "mon-25", "text": "Дрони над акваторією Чорного моря.",
+      "facts": [ { "threat": "UAV", "current": "Чорне море" } ] },
+
+    { "id": "mon-26", "text": "Увага! Балістика! Дніпро, Дніпропетровська область — терміново в укриття!",
+      "facts": [ { "threat": "BALLISTIC_MISSILE", "current": "Дніпро" } ] },
+
+    { "id": "alert-27", "text": "Відбій тривоги!",
+      "facts": [ { "event": "AlertCancelled", "noPlaces": true } ] },
+
+    { "id": "mon-28", "text": "Пуски КР з Каспійського моря — Ту-95МС.",
+      "facts": [ { "threat": "CRUISE_MISSILE", "origin": "Каспійське море", "launch": true }, { "threat": "TU_95MS" } ] },
+
+    { "id": "en-29", "text": "Shahed UAVs heading south.",
+      "facts": [ { "threat": "SHAHED", "direction": 180 } ] },
+
+    { "id": "ps-30", "text": "БпЛА на сході Полтавщини курсом на Дніпро.",
+      "facts": [ { "threat": "UAV", "current": "Полтавська область", "quadrant": 90, "destination": "Дніпро" } ] },
+
+    { "id": "mon-31", "text": "Герань-2 у Броварському районі, курс на Київ.",
+      "facts": [ { "threat": "SHAHED_136", "level": "Model", "current": "Бровари", "destination": "Київ" } ] },
+
+    { "id": "ps-32", "text": "Декілька груп БпЛА на Черкащині рухаються у північно-західному напрямку.",
+      "facts": [ { "threat": "UAV", "approx": true, "current": "Черкаська область", "direction": 315 } ] },
+
+    { "id": "noise-33", "text": "Доброго ранку! Сьогодні о 10:00 засідання міської ради.",
+      "facts": [] },
+
+    { "id": "mon-34", "text": "Пуск Х-59 з тактичної авіації в бік Херсона.",
+      "facts": [ { "threat": "KH_59", "destination": "Херсон", "launch": true }, { "threat": "TACTICAL_AIRCRAFT" } ] },
+
+    { "id": "ps-35", "text": "Балістика з півдня на Одесу!",
+      "facts": [ { "threat": "BALLISTIC_MISSILE", "destination": "Одеса", "direction": 0 } ] }
+  ]
+}

@@ -1,0 +1,271 @@
+import { useCallback, useEffect, useState } from 'react'
+import { admin, AdminError, getAdminToken, setAdminToken, type AdminSourceDto, type AdminStatusDto, type SettingDto } from '../../api/admin'
+import { Badge, Field, findSetting, Section, Toggle, type Draft } from './fields'
+import SourcesEditor from './SourcesEditor'
+
+type SectionId = 'sources' | 'alerts' | 'telegram' | 'llm' | 'system'
+
+const NAV: { id: SectionId; label: string }[] = [
+  { id: 'sources', label: 'Джерела' },
+  { id: 'alerts', label: 'alerts.in.ua' },
+  { id: 'telegram', label: 'Telegram' },
+  { id: 'llm', label: 'LLM' },
+  { id: 'system', label: 'Система' },
+]
+
+interface Props {
+  onClose: () => void
+}
+
+/**
+ * Full-screen settings page (#/settings). Values go to the app_settings table through /api/admin/*; the Worker
+ * picks them up within seconds and restarts its collectors — no process restart, no .env editing.
+ */
+export default function SettingsPage({ onClose }: Props) {
+  const [section, setSection] = useState<SectionId>('sources')
+  const [settings, setSettings] = useState<SettingDto[]>([])
+  const [status, setStatus] = useState<AdminStatusDto | null>(null)
+  const [sources, setSources] = useState<AdminSourceDto[]>([])
+  const [draft, setDraft] = useState<Draft>({})
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null)
+  const [authNeeded, setAuthNeeded] = useState(false)
+  const [tokenInput, setTokenInput] = useState(getAdminToken())
+
+  const load = useCallback(async () => {
+    try {
+      const [s, st, src] = await Promise.all([admin.settings(), admin.status(), admin.sources()])
+      setSettings(s)
+      setStatus(st)
+      setSources(src)
+      setAuthNeeded(false)
+    } catch (e) {
+      if (e instanceof AdminError && (e.status === 401 || e.status === 403)) setAuthNeeded(true)
+      else setMessage({ ok: false, text: (e as Error).message })
+    }
+  }, [])
+
+  useEffect(() => {
+    void load()
+    const id = window.setInterval(() => void load(), 10_000)
+    return () => window.clearInterval(id)
+  }, [load])
+
+  const change = (key: string, value: string | null) => setDraft((d) => ({ ...d, [key]: value }))
+  const s = (key: string) => findSetting(settings, key)
+  const dirty = Object.keys(draft).length > 0
+
+  const save = async () => {
+    if (!dirty) return
+    setBusy(true)
+    try {
+      await admin.saveSettings(draft)
+      if (draft['Admin:Token']) setAdminToken(draft['Admin:Token'])
+      setDraft({})
+      setMessage({ ok: true, text: 'Збережено. Worker застосує зміни протягом кількох секунд.' })
+      await load()
+    } catch (e) {
+      setMessage({ ok: false, text: (e as Error).message })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const props: TabProps = { status, draft, change, s, notify: setMessage, reload: load }
+
+  return (
+    <div className="pointer-events-auto absolute inset-0 z-40 flex flex-col bg-slate-100 dark:bg-slate-950 dark:text-slate-100">
+      <header className="flex items-center gap-3 border-b border-slate-200 bg-white px-4 py-2 text-sm dark:border-slate-700 dark:bg-slate-900">
+        <button className="rounded px-2 py-1 hover:bg-slate-200 dark:hover:bg-slate-700" onClick={onClose}>
+          ← Карта
+        </button>
+        <span className="font-semibold">Налаштування</span>
+        <span className="ml-auto flex items-center gap-2 text-xs">
+          {status && <Badge ok={status.workerAlive} text={status.workerAlive ? 'Worker працює' : 'Worker не відповідає'} />}
+          {status && <Badge ok={status.alertsConfigured} text={status.alertsConfigured ? 'alerts.in.ua ✓' : 'alerts.in.ua —'} />}
+          {status && <Badge ok={telegramBadge(status).ok} text={telegramBadge(status).text} />}
+        </span>
+      </header>
+
+      {authNeeded ? (
+        <div className="m-auto w-full max-w-md space-y-3 rounded-xl bg-white p-5 text-sm shadow dark:bg-slate-900">
+          <p>
+            Сервер вимагає адмін-токен (<code>Admin:Token</code>), або сторінку відкрито не з localhost.
+          </p>
+          <input className="w-full rounded border border-slate-300 px-2 py-1 font-mono dark:border-slate-600 dark:bg-slate-800" type="password" placeholder="Admin token" value={tokenInput} onChange={(e) => setTokenInput(e.target.value)} />
+          <button
+            className="rounded bg-slate-800 px-3 py-1.5 text-white dark:bg-slate-100 dark:text-slate-900"
+            onClick={() => {
+              setAdminToken(tokenInput)
+              void load()
+            }}
+          >
+            Увійти
+          </button>
+        </div>
+      ) : (
+        <div className="flex min-h-0 flex-1">
+          <nav className="w-44 shrink-0 border-r border-slate-200 bg-white p-2 text-sm dark:border-slate-700 dark:bg-slate-900">
+            {NAV.map((n) => (
+              <button key={n.id} className={`block w-full rounded px-3 py-1.5 text-left ${section === n.id ? 'bg-slate-200 font-medium dark:bg-slate-700' : 'hover:bg-slate-100 dark:hover:bg-slate-800'}`} onClick={() => setSection(n.id)}>
+                {n.label}
+              </button>
+            ))}
+          </nav>
+
+          <main className="flex min-w-0 flex-1 flex-col">
+            <div className="flex-1 space-y-4 overflow-y-auto p-4">
+              <div className="mx-auto max-w-5xl space-y-4">
+                {section === 'sources' && <SourcesEditor sources={sources} reload={load} notify={setMessage} />}
+                {section === 'alerts' && <AlertsSection {...props} />}
+                {section === 'telegram' && <TelegramSection {...props} />}
+                {section === 'llm' && <LlmSection {...props} />}
+                {section === 'system' && <SystemSection {...props} />}
+              </div>
+            </div>
+            <div className="flex items-center justify-between gap-3 border-t border-slate-200 bg-white px-4 py-3 text-sm dark:border-slate-700 dark:bg-slate-900">
+              <span className={`min-h-5 text-xs ${message ? (message.ok ? 'text-emerald-600' : 'text-red-600') : 'text-slate-400'}`}>{message?.text ?? (dirty ? 'Є незбережені зміни' : '')}</span>
+              <div className="flex gap-2">
+                <button className="rounded border border-slate-300 px-3 py-1.5 dark:border-slate-600" onClick={() => setDraft({})} disabled={!dirty}>
+                  Скасувати
+                </button>
+                <button className="rounded bg-slate-800 px-3 py-1.5 text-white disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900" onClick={() => void save()} disabled={!dirty || busy}>
+                  {busy ? 'Зберігаю…' : 'Зберегти'}
+                </button>
+              </div>
+            </div>
+          </main>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Runtime state wins over "credentials present": a configured but crashing collector is not a green check. */
+function telegramBadge(status: AdminStatusDto): { ok: boolean | null; text: string } {
+  const st = status.telegramStatus ?? ''
+  if (st.startsWith('listening') || st.startsWith('logged_in')) return { ok: true, text: 'Telegram ✓' }
+  if (st === 'waiting_code') return { ok: null, text: 'Telegram: потрібен код' }
+  if (st.startsWith('error')) return { ok: false, text: 'Telegram: помилка' }
+  if (st === 'connecting') return { ok: null, text: 'Telegram: підключення…' }
+  return { ok: status.telegramConfigured ? null : false, text: status.telegramConfigured ? 'Telegram: запуск…' : 'Telegram —' }
+}
+
+interface TabProps {
+  status: AdminStatusDto | null
+  draft: Draft
+  change: (key: string, value: string | null) => void
+  s: (key: string) => SettingDto | undefined
+  notify: (m: { ok: boolean; text: string }) => void
+  reload: () => Promise<void>
+}
+
+function AlertsSection({ status, draft, change, s, notify }: TabProps) {
+  const [testing, setTesting] = useState(false)
+  const test = async () => {
+    setTesting(true)
+    try {
+      const r = await admin.testAlerts(draft['Collectors:AlertsInUa:Token'] || undefined)
+      notify({ ok: r.ok, text: `alerts.in.ua: ${r.message}` })
+    } catch (e) {
+      notify({ ok: false, text: (e as Error).message })
+    } finally {
+      setTesting(false)
+    }
+  }
+  return (
+    <Section title="alerts.in.ua" badge={<Badge ok={status?.alertsConfigured ?? null} text={status?.alertsConfigured ? 'налаштовано' : 'не налаштовано'} />}>
+      <p className="text-xs text-slate-500">Офіційні повітряні тривоги по областях. Токен видається за запитом на alerts.in.ua/api-request. Опитування кожні 30 с (змінюється у джерелі «alerts.in.ua» на вкладці Джерела).</p>
+      <Toggle label="Увімкнути" setting={s('Collectors:AlertsInUa:Enabled')} draft={draft} onChange={change} />
+      <Field label="Токен API" setting={s('Collectors:AlertsInUa:Token')} draft={draft} onChange={change} type="password" />
+      <button className="rounded border border-slate-300 px-3 py-1 text-xs dark:border-slate-600" onClick={() => void test()} disabled={testing}>
+        {testing ? 'Перевіряю…' : 'Перевірити токен'}
+      </button>
+    </Section>
+  )
+}
+
+function TelegramSection({ status, draft, change, s, notify, reload }: TabProps) {
+  const [code, setCode] = useState('')
+  const tgStatus = status?.telegramStatus ?? ''
+  const waiting = tgStatus === 'waiting_code'
+  const ok = tgStatus.startsWith('listening') || tgStatus.startsWith('logged_in')
+  const enabled = (draft['Collectors:Telegram:Enabled'] ?? s('Collectors:Telegram:Enabled')?.value ?? 'false') === 'true'
+  const label = waiting ? 'очікує код входу' : tgStatus.startsWith('listening') ? tgStatus : tgStatus.startsWith('error') ? 'помилка' : !enabled ? 'вимкнено' : tgStatus || 'не запущено'
+
+  const sendCode = async () => {
+    try {
+      await admin.telegramCode(code.trim())
+      setCode('')
+      notify({ ok: true, text: 'Код передано Worker-у.' })
+      await reload()
+    } catch (e) {
+      notify({ ok: false, text: (e as Error).message })
+    }
+  }
+
+  return (
+    <>
+      <Section title="Telegram (MTProto)" badge={<Badge ok={waiting ? null : ok ? true : status?.telegramConfigured ? false : null} text={label} />}>
+        <p className="text-xs text-slate-500">
+          Це сесія звичайного акаунта, не бот: боти не бачать публічні канали. Заведіть окремий акаунт, отримайте <code>api_id</code>/<code>api_hash</code> на{' '}
+          <a className="underline" href="https://my.telegram.org" target="_blank" rel="noreferrer">
+            my.telegram.org
+          </a>
+          . Після збереження Worker попросить код із Telegram — поле для нього з'явиться тут. Канали додаються на вкладці «Джерела».
+        </p>
+        {tgStatus.startsWith('error') && <div className="rounded bg-red-50 p-2 text-xs text-red-700 dark:bg-red-900/30 dark:text-red-200">{tgStatus}</div>}
+        {!tgStatus && status?.telegramConfigured && <div className="rounded bg-amber-50 p-2 text-xs text-amber-800 dark:bg-amber-900/30 dark:text-amber-200">Дані збережено, Worker ще не звітував про стан сесії. Якщо це триває довше хвилини — дивіться колонку «Стан» у Джерелах або лог Worker-а.</div>}
+        <Toggle label="Увімкнути" setting={s('Collectors:Telegram:Enabled')} draft={draft} onChange={change} />
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="api_id" setting={s('Collectors:Telegram:ApiId')} draft={draft} onChange={change} type="number" />
+          <Field label="api_hash" setting={s('Collectors:Telegram:ApiHash')} draft={draft} onChange={change} type="password" />
+          <Field label="Телефон" setting={s('Collectors:Telegram:Phone')} draft={draft} onChange={change} placeholder="+380…" />
+          <Field label="Пароль 2FA" setting={s('Collectors:Telegram:Password')} draft={draft} onChange={change} type="password" hint="лише якщо увімкнено двофакторний захист" />
+          <Field label="Дочитати постів при старті" setting={s('Collectors:Telegram:BackfillLimit')} draft={draft} onChange={change} type="number" />
+        </div>
+        <Toggle label="Підписуватись на канали автоматично" setting={s('Collectors:Telegram:AutoJoin')} draft={draft} onChange={change} hint="без підписки live-повідомлення не приходять" />
+      </Section>
+      {(waiting || tgStatus === 'connecting') && (
+        <Section title="Код входу" badge={<Badge ok={null} text="потрібен зараз" />}>
+          <div className="flex gap-2">
+            <input className="w-40 rounded border border-slate-300 px-2 py-1 font-mono dark:border-slate-600 dark:bg-slate-800" placeholder="12345" value={code} onChange={(e) => setCode(e.target.value)} />
+            <button className="rounded bg-slate-800 px-3 py-1 text-white dark:bg-slate-100 dark:text-slate-900" onClick={() => void sendCode()} disabled={!code.trim()}>
+              Надіслати
+            </button>
+          </div>
+          <p className="text-xs text-slate-500">Код прийшов у Telegram на цей акаунт (не SMS). Worker чекає до 10 хвилин.</p>
+        </Section>
+      )}
+    </>
+  )
+}
+
+function LlmSection({ status, draft, change, s }: TabProps) {
+  return (
+    <Section title="LLM fallback (Anthropic)" badge={<Badge ok={status?.llmConfigured ?? null} text={status?.llmConfigured ? 'увімкнено' : 'вимкнено'} />}>
+      <p className="text-xs text-slate-500">Викликається лише коли правила не знайшли нічого в тексті, схожому на повідомлення про загрозу. Модель може повертати лише коди з таксономії; невідомі місця відкидаються.</p>
+      <Toggle label="Увімкнути" setting={s('Llm:Enabled')} draft={draft} onChange={change} />
+      <Field label="Модель" setting={s('Llm:Model')} draft={draft} onChange={change} placeholder="claude-opus-5" />
+      <Field label="API key" setting={s('Llm:ApiKey')} draft={draft} onChange={change} type="password" hint="або змінна середовища ANTHROPIC_API_KEY" />
+    </Section>
+  )
+}
+
+function SystemSection({ status, draft, change, s }: TabProps) {
+  return (
+    <>
+      <Section title="Стан" badge={<Badge ok={status?.workerAlive ?? null} text={status?.workerAlive ? 'Worker працює' : 'Worker не відповідає'} />}>
+        <div className="text-xs text-slate-500">
+          Останній heartbeat: {status?.workerLastSeen ? new Date(status.workerLastSeen).toLocaleTimeString('uk-UA') : '—'}. Налаштування зберігаються в БД (<code>app_settings</code>) і перекривають appsettings/env; Worker перечитує їх кожні 5 с.
+        </div>
+      </Section>
+      <Section title="Доступ" badge={<Badge ok={status?.adminTokenSet ?? null} text={status?.adminTokenSet ? 'токен задано' : 'лише localhost'} />}>
+        <Field label="Адмін-токен" setting={s('Admin:Token')} draft={draft} onChange={change} type="password" hint="Поки не задано, ця сторінка доступна лише з localhost. Після збереження токен запам'ятовується у цьому браузері." />
+      </Section>
+      <Section title="Кореляція">
+        <Field label="Поріг приєднання до треку (0–1)" setting={s('Correlation:AttachThreshold')} draft={draft} onChange={change} type="number" hint="0.6 типово; вище — більше окремих треків, нижче — агресивніше злиття" />
+      </Section>
+    </>
+  )
+}

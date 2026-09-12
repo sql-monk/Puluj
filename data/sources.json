@@ -1,0 +1,55 @@
+{
+  "sources": [
+    {
+      "code": "alerts_in_ua",
+      "name": "alerts.in.ua",
+      "type": "RestApi",
+      "url": "https://api.alerts.in.ua/v1/alerts/active.json",
+      "trustLevel": 0.95,
+      "priority": 100,
+      "enabled": true,
+      "pollingInterval": "00:00:30",
+      "config": { "collector": "alerts_in_ua" }
+    },
+    {
+      "code": "tg_kpszsu",
+      "name": "Повітряні сили ЗС України",
+      "type": "Telegram",
+      "url": "https://t.me/kpszsu",
+      "trustLevel": 0.95,
+      "priority": 90,
+      "enabled": true,
+      "config": { "channel": "kpszsu", "language": "uk", "official": true }
+    },
+    {
+      "code": "tg_kyiv_ova",
+      "name": "Київська ОВА",
+      "type": "Telegram",
+      "url": "https://t.me/kyivoda",
+      "trustLevel": 0.9,
+      "priority": 80,
+      "enabled": true,
+      "config": { "channel": "kyivoda", "language": "uk", "official": true, "homeRegion": "Київська область" }
+    },
+    {
+      "code": "tg_kyiv_kmva",
+      "name": "КМВА",
+      "type": "Telegram",
+      "url": "https://t.me/kyivcityofficial",
+      "trustLevel": 0.9,
+      "priority": 80,
+      "enabled": true,
+      "config": { "channel": "kyivcityofficial", "language": "uk", "official": true, "homeRegion": "Київ" }
+    },
+    {
+      "code": "tg_monitor_1",
+      "name": "Моніторинговий канал (приклад)",
+      "type": "Telegram",
+      "url": "https://t.me/example_monitor",
+      "trustLevel": 0.6,
+      "priority": 50,
+      "enabled": false,
+      "config": { "channel": "example_monitor", "language": "uk", "official": false }
+    }
+  ]
+}

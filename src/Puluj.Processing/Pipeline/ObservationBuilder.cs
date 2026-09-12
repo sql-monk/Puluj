@@ -1,0 +1,169 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Puluj.Domain.Entities;
+using Puluj.Domain.Enums;
+using Puluj.Infrastructure.Persistence;
+using Puluj.Processing.Indexes;
+using Puluj.Processing.Parsing;
+
+namespace Puluj.Processing.Pipeline;
+
+/// <summary>
+/// Geocoder + Classifier (spec §4): turns a ParsedFact into an Observation with honest location kinds and
+/// confidences derived from the alias precision and the source trust level. Never invents precision.
+/// </summary>
+public sealed class ObservationBuilder(IIndexes indexes)
+{
+    public Observation Build(ParsedFact fact, RawMessage raw, Source source, string parserVersion, IdentificationMethod method, string language)
+    {
+        var gazetteer = indexes.Gazetteer;
+        var obs = new Observation
+        {
+            RawMessageId = raw.RawMessageId,
+            SourceId = source.SourceId,
+            SegmentIndex = fact.SegmentIndex,
+            SegmentText = fact.SegmentText,
+            ObservedAt = raw.PublishedAt,
+            EventType = fact.EventType,
+            AlertLevel = fact.AlertLevel,
+            IdentificationMethod = method,
+            ParserVersion = parserVersion,
+            ObjectCount = fact.Count,
+            ObjectCountIsApproximate = fact.CountIsApproximate,
+        };
+
+        var trustCap = source.TrustLevel switch { >= 0.85 => ConfidenceLevel.High, >= 0.6 => ConfidenceLevel.Medium, _ => ConfidenceLevel.Low };
+
+        if (fact.Threat is { } threat)
+        {
+            obs.ThreatCategoryId = threat.Ref.CategoryId;
+            obs.ThreatClassId = threat.Ref.ClassId;
+            obs.ThreatFamilyId = threat.Ref.FamilyId;
+            obs.ThreatModelId = threat.Ref.ModelId;
+            obs.IdentificationSource = method == IdentificationMethod.Llm ? $"{parserVersion}: {threat.MatchedText}" : threat.MatchedText;
+            // Confidence in the deepest identified level, never above what the source itself asserts.
+            obs.ModelConfidence = threat.Ref.Level is AliasTargetLevel.Model or AliasTargetLevel.Family
+                ? Min(threat.EffectiveConfidence, trustCap)
+                : ConfidenceLevel.Unknown;
+            obs.ClassificationConfidence = Min(threat.EffectiveConfidence, trustCap);
+        }
+
+        obs.ObservationConfidence = method == IdentificationMethod.Structured ? ConfidenceLevel.Confirmed : trustCap;
+        if (fact.Threat?.Hedged == true)
+        {
+            obs.ObservationConfidence = Lower(obs.ObservationConfidence);
+        }
+
+        // Location: the current area if reported, otherwise the origin ("з Чернігівщини" = it is leaving that region).
+        var located = fact.Current ?? fact.Origin;
+        if (located is not null)
+        {
+            obs.LocationPlaceId = located.Place.PlaceId;
+            obs.LocationKind = KindFor(located.Place.Level);
+            if (located.QuadrantDeg is double q && located.Place.RadiusKm > 20)
+            {
+                // "на півночі Київщини": still the region, but the northern half of it.
+                obs.Location = Geo.Offset(located.Place.Centroid.Coordinate, q, located.Place.RadiusKm * 0.5);
+                obs.LocationAccuracyKm = located.Place.RadiusKm * 0.6;
+            }
+            else
+            {
+                obs.Location = located.Place.Centroid;
+                obs.LocationAccuracyKm = located.Place.RadiusKm;
+            }
+            // "Фастівський район": the gazetteer has no raions, so the raion resolves to its town — widen it honestly.
+            if (obs.LocationKind == LocationKind.City && NamesRaion(fact.SegmentText, located.MatchedText))
+            {
+                obs.LocationKind = LocationKind.District;
+                obs.LocationAccuracyKm = Math.Max(obs.LocationAccuracyKm ?? 0, RaionKm);
+            }
+        }
+        else
+        {
+            obs.LocationKind = fact.Direction is not null || fact.Destination is not null ? LocationKind.DirectionOnly : LocationKind.Unknown;
+        }
+        obs.OriginPlaceId = fact.Origin?.Place.PlaceId;
+        obs.DestinationPlaceId = fact.Destination?.Place.PlaceId;
+
+        // Direction: reported compass words first; otherwise bearing towards the named destination.
+        if (fact.Direction is { } dir)
+        {
+            obs.DirectionDeg = dir.Degrees;
+            obs.DirectionKind = dir.Kind;
+            obs.DirectionConfidence = Min(ConfidenceLevel.High, trustCap);
+        }
+        else if (fact.Destination is { } dest && located is not null && dest.Place.PlaceId != located.Place.PlaceId)
+        {
+            // Bearing from where the marker is drawn towards the named destination, so the vector on the map always
+            // points at the place the text names. From the centre of a coarse area it is only a hint: Low confidence.
+            obs.DirectionDeg = Geo.BearingDeg(located.Place.Centroid.Coordinate, dest.Place.Centroid.Coordinate);
+            obs.DirectionKind = DirectionKind.TowardsPlace;
+            obs.DirectionConfidence = Min(located.Place.RadiusKm <= PreciseKm ? ConfidenceLevel.Medium : ConfidenceLevel.Low, trustCap);
+        }
+        else
+        {
+            obs.DirectionKind = DirectionKind.Unknown;
+            obs.DirectionConfidence = ConfidenceLevel.Unknown;
+        }
+
+        obs.ParserMetadata = Metadata(fact, language, gazetteer);
+        return obs;
+    }
+
+    /// <summary>Typical half-extent of a raion, used when a raion is named but only its town is in the gazetteer.</summary>
+    private const double RaionKm = 25;
+
+    private static bool NamesRaion(string segment, string matched)
+    {
+        var i = segment.IndexOf(matched, StringComparison.OrdinalIgnoreCase);
+        if (i < 0)
+        {
+            return false;
+        }
+        var rest = segment[(i + matched.Length)..].TrimStart();
+        return rest.StartsWith("район", StringComparison.OrdinalIgnoreCase) || rest.StartsWith("р-н", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>A place this small is a usable point for bearings; larger ones are areas whose centre says little.</summary>
+    private const double PreciseKm = 25;
+
+    public static LocationKind KindFor(PlaceLevel level) => level switch
+    {
+        PlaceLevel.Country or PlaceLevel.Region => LocationKind.Region,
+        PlaceLevel.District or PlaceLevel.Hromada => LocationKind.District,
+        PlaceLevel.NamedArea => LocationKind.Area,
+        _ => LocationKind.City,
+    };
+
+    private static ConfidenceLevel Min(ConfidenceLevel a, ConfidenceLevel b) => (ConfidenceLevel)Math.Min((int)a, (int)b);
+
+    private static ConfidenceLevel Lower(ConfidenceLevel c) => c == ConfidenceLevel.Unknown ? c : (ConfidenceLevel)Math.Max((int)ConfidenceLevel.Low, (int)c - 1);
+
+    private static JsonDocument Metadata(ParsedFact fact, string language, GazetteerIndex gazetteer)
+    {
+        var o = new JsonObject
+        {
+            ["language"] = language,
+            ["rules"] = new JsonArray(fact.Rules.Select(r => (JsonNode)r).ToArray()),
+            ["launch"] = fact.IsLaunch,
+        };
+        if (fact.Threat is { } t)
+        {
+            o["threat"] = new JsonObject { ["code"] = t.Ref.Code, ["level"] = t.Ref.Level.ToString(), ["text"] = t.MatchedText, ["hedged"] = t.Hedged };
+        }
+        o["places"] = new JsonArray(fact.Places.Select(p => (JsonNode)new JsonObject
+        {
+            ["id"] = p.Place.PlaceId,
+            ["name"] = p.Place.Name,
+            ["level"] = p.Place.Level.ToString(),
+            ["region"] = gazetteer.RegionOf(p.Place)?.Name,
+            ["role"] = p.Role.ToString(),
+            ["text"] = p.MatchedText,
+        }).ToArray());
+        if (fact.Direction is { } d)
+        {
+            o["direction"] = new JsonObject { ["deg"] = d.Degrees, ["kind"] = d.Kind.ToString(), ["text"] = d.Text };
+        }
+        return JsonDocument.Parse(o.ToJsonString());
+    }
+}

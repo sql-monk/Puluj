@@ -1,0 +1,262 @@
+# Puluj — документація
+
+Puluj збирає відкриті повідомлення про повітряні загрози (alerts.in.ua, офіційні та моніторингові Telegram-канали),
+розбирає їх на факти, зв'язує факти у треки об'єктів і показує на карті з напрямком, ETA до точки користувача та
+повним ланцюжком джерел. Головне правило: система завжди може відповісти, **що** показує, **звідки** це взялося і
+**наскільки** вона в цьому впевнена. Специфікація продукту — [`../Puluj.md`](../Puluj.md).
+
+Зміст: [Як влаштовано](#як-влаштовано) · [Запуск і налаштування](#запуск-і-налаштування) · [Джерела](#джерела) ·
+[Шлях повідомлення](#шлях-повідомлення) · [Треки](#треки) · [Дані](#дані) · [API](#api) · [Карта і ETA](#карта-і-eta) ·
+[Експлуатація](#експлуатація) · [Розширення без коду](#розширення-без-коду)
+
+## Як влаштовано
+
+![Огляд системи](diagrams/01-overview.png)
+
+| Частина | Що робить |
+|---|---|
+| **Puluj.Worker** | колектори джерел, розбір тексту, дедуплікація, кореляція треків, закриття треків за таймаутом. Один процес, кілька фонових служб; при старті застосовує міграції і seed |
+| **PostgreSQL + PostGIS** | єдине джерело істини: оригінальні повідомлення, факти, треки з історією, довідники (таксономія, географія) |
+| **Puluj.Api** | REST для карти, SignalR для live-подій, роздача зібраного frontend. Тільки читає БД |
+| **web/** | React + MapLibre. ETA та старіння маркерів рахує сам — сервер не знає, де користувач |
+
+Worker → Api зв'язані через Postgres `LISTEN/NOTIFY`: після коміту повідомлення Worker публікує `{type, id}`, Api дочитує
+об'єкт із БД і розсилає клієнтам. Ніякого брокера чи Redis.
+
+Проєкти: `src/Puluj.Domain` (сутності), `Puluj.Infrastructure` (EF Core/PostGIS, міграції, seed, NOTIFY, ingestion),
+`Puluj.Collectors`, `Puluj.Processing` (парсер, кореляція), `Puluj.Worker`, `Puluj.Api`, `Puluj.Contracts` (DTO);
+`web/`; `data/` (seed-файли); `tests/`.
+
+## Запуск і налаштування
+
+Потрібні .NET 10, Node 24, PostgreSQL 17 + PostGIS (БД `puluj`, користувач/пароль `puluj`) або Docker.
+
+```powershell
+pwsh scripts/gazetteer/download.ps1   # один раз: полігони областей (geoBoundaries) + населені пункти (GeoNames), ~80 MB, не в git
+pwsh scripts/dev-run.ps1 -ResetDb     # build, міграції + seed, Api :5257 і Worker у фоні (логи в %TEMP%\puluj-*.log); -Stop зупиняє
+cd web; npm install; npm run dev      # http://localhost:5173 (проксі на Api)
+python scripts/dev-scenario.py        # демо-ситуація через POST /api/dev/ingest (лише Development)
+```
+
+Production: `cp .env.example .env`, заповнити токени, `docker compose -f deploy/docker-compose.yml up --build` → http://localhost:8080.
+`npm run build` кладе frontend у `src/Puluj.Api/wwwroot`, і Api віддає його на `/`.
+
+Тести: `dotnet test` (парсер на golden-корпусі, кореляція, LLM-мапінг; інтеграційний — з `PULUJ_TEST_CONNECTION=<рядок до тестової БД>`
+або Docker/Testcontainers), `cd web && npm test` (ETA).
+
+**Сторінки.** `/` — карта України (області, тривоги, треки, стрічка повідомлень справа; клік по області підсвічує її
+і фільтрує стрічку). `#/kyiv` — окрема карта Києва з 10 районами (полігони з OSM, `scripts/gazetteer/download-kyiv.py`)
+і ~50–80 км околиць, щоб було видно вектори, які заходять у місто; тривоги по районах (жовтий/червоний рівень з
+повідомлень КМВА/ОВА), список районів зліва зі станом і кількістю повідомлень за годину.
+
+**Відтворення історії** — кнопка ⏱ у верхній панелі на будь-якій сторінці: вікно 1–24 год до вибраного моменту,
+гістограма повідомлень/тривог, повзунок, ▶/⏸ зі швидкістю 1–60 хв/с, кроки ±1 хв (←/→, Shift — ±10), Home/End, Esc —
+вихід. Кожна позиція — `GET /api/snapshot?at=` (стан треків з ревізій, тривоги на той момент); стрічка показує лише те,
+що вже було повідомлено на момент курсора, останні 3 хв підсвічені. Події SignalR у цьому режимі ігноруються.
+
+**Сторінка налаштувань** — кнопка ⚙ у верхній панелі (або `#/settings`): токен alerts.in.ua з перевіркою, Telegram
+(api_id/api_hash/телефон, код входу вводиться там само), LLM-ключ, джерела (увімкнути/вимкнути, додати канал, довіра,
+пріоритет, інтервал, домашній регіон), адмін-токен, поріг кореляції. Значення зберігаються в таблиці `app_settings` і
+**перекривають** файли/env; Worker перечитує їх кожні 5 с і перезапускає колектори без рестарту процесу. Поки
+`Admin:Token` не задано, сторінка доступна лише з localhost; секрети ніколи не повертаються назад у браузер.
+
+Ті самі ключі можна задати в `appsettings.json` Worker-а або змінними `Section__Key`:
+
+| Ключ | Типово | Опис |
+|---|---|---|
+| `ConnectionStrings__Puluj` | localhost | PostgreSQL |
+| `Collectors__AlertsInUa__{Enabled,Token,PollingInterval}` | off, —, 30 с | alerts.in.ua |
+| `Collectors__Telegram__{Enabled,ApiId,ApiHash,Phone,Password,VerificationCode,SessionPath,AutoJoin,BackfillLimit}` | off | MTProto-сесія |
+| `Llm__{Enabled,Model,TimeoutSeconds,MaxCallsPerMinute}` + `ANTHROPIC_API_KEY` | off, claude-opus-5, 20, 20 | LLM fallback парсера |
+| `Correlation__{AttachThreshold,SlackKm,DuplicateWindow,CloseAfterWindows}` | 0.6, 30, 3 хв, 2 | кореляція (див. нижче) |
+| `Processing__{MaxAttempts,PendingPollInterval}` | 3, 10 с | повтори обробки, sweeper |
+| `Seed__DataDirectory` | `data` | шукається вгору від content root |
+
+## Джерела
+
+Список — `data/sources.json` (upsert по `code` при старті Worker): `type`, `trustLevel` 0..1 (стеля впевненості для фактів
+з цього джерела), `priority`, `enabled`, `config` (для Telegram — `channel`). Секретів там немає.
+
+**alerts.in.ua.** Токен видають за запитом на alerts.in.ua/api-request. Колектор опитує `active.json` кожні 30 с; кожен
+початок і кінець тривоги стає окремим `RawMessage`; поточний набір активних тривог зберігається в `collector_states.cursor`,
+тому «кінці», що сталися під час простою Worker-а, дописуються після рестарту.
+
+**Telegram — це не бот.** Бот бачить лише чати, куди його додав адміністратор, і не читає публічні канали ПС ЗСУ чи ОВА.
+Тому використовується сесія звичайного акаунта (WTelegramClient, MTProto), яка підписується на канали як Telegram Desktop:
+
+1. окремий акаунт з окремою SIM (не особистий);
+2. https://my.telegram.org → API development tools → `api_id`, `api_hash`;
+3. `Collectors__Telegram__Enabled=true`, `ApiId`, `ApiHash`, `Phone=+380…`, `Password` (лише при 2FA);
+4. перший запуск: у лозі Worker `Telegram asks for the login code…` — код вписати у `Collectors__Telegram__VerificationCode`
+   або у файл `<SessionPath>.code` (Worker чекає до 10 хв). Далі сесія живе у файлі (у Docker — volume `tgsession`);
+5. `AutoJoin` підписує акаунт на канали з `sources.json` (без підписки live-оновлення не приходять), `BackfillLimit` дочитує
+   останні пости при старті. Редагування поста зберігається окремим `RawMessage` — оригінал не перезаписується.
+
+**LLM fallback** (опційно): `Llm__Enabled=true` + `ANTHROPIC_API_KEY`. Викликається лише коли правила не знайшли жодного
+факту, а текст містить слова-тригери («загроз», «курс», «пуск», «ракет»…). Відповідь — structured output за схемою; модель
+може повертати лише коди з таксономії, невідомі місця відкидаються, ніщо не вигадується. Без ключа тихо вимкнено.
+
+## Шлях повідомлення
+
+![Шлях повідомлення](diagrams/02-pipeline.png)
+
+На прикладі поста «Шахеди на Чернігівщині курсом на Київщину.»:
+
+1. **RawMessage.** Колектор зберігає оригінал: текст, час публікації, посилання, payload. Запис незмінний. Ключі
+   ідемпотентності — `(джерело, id повідомлення)` і хеш вмісту, тому повтори нічого не змінюють. Рядок має статус `Pending`;
+   ProcessingLoop бере його з in-process черги, а sweeper кожні 10 с добирає `Pending` з БД — рестарт нічого не губить.
+2. **Нормалізація.** NFC, емодзі → слова (`🛵` → «шахед», `🔴` → «тривога»), нижній регістр, речення → сегменти, токени.
+   Припущення: один сегмент — один факт (плюс по факту на кожну окрему загрозу в сегменті).
+3. **Правила** (`RuleParser`), усе на стемах — токен збігається, якщо починається зі стема і має ≤ 4 літер флексії:
+
+   | Що | Як | У прикладі |
+   |---|---|---|
+   | загроза | aliases з БД: «шахед» → сімейство, «shahed-136» → модель; при перекритті — довший/точніший | сімейство **SHAHED** |
+   | місце та роль | газетир (області, міста з відмінками) + прийменник: «з …» = звідки, «курсом на / у напрямку …» = куди, «на …щині / над / у районі» = тут; «на Київщину» (знахідний) — куди | тут **Чернігівська обл.**, куди **Київська обл.** |
+   | напрямок | компасні слова, «з півночі» = розворот на 180°; інакше bearing тут → куди (позначається як «за пунктом призначення») | ~223° |
+   | кількість | «5», «5х», «два», «група/декілька» (≈3), «до 10» (≈) | — |
+   | тип події | «відбій тривоги», «загроза минула», «вибухи», «працює ППО»; інакше — спостереження загрози | спостереження |
+   | hedge | «ймовірно», «можливо», «?» → впевненість −1 рівень | — |
+
+   Списки: «Шахеди:» у заголовку застосовується до наступних рядків; «Балістика! / Дніпро — в укриття!» — загроза
+   переноситься на наступний сегмент із місцем. «На півночі Київщини» зсуває точку в межах області, лишаючи тип «область».
+4. **Observation.** Класифікація рівно того рівня, який дав текст (сімейство, а не вигадана модель); упевненість alias-а
+   обмежена довірою джерела; локація — центроїд району з радіусом і `LocationKind = Region` (точкою це не малюється);
+   напрямок із упевненістю; `parser_metadata` пояснює, які правила спрацювали. Структуровані payload-и alerts.in.ua минають
+   NLP: одразу `AirAlert` + факт з упевненістю `Confirmed`.
+5. Далі — [треки](#треки). Помилка на будь-якій стадії відкочує транзакцію повідомлення, пише `processing_errors`, `attempts++`;
+   після 3 спроб — `Failed`, решта повідомлень не чекає.
+
+Якість парсера міряється golden-корпусом `data/corpus/cases.json` (35 кейсів): кожен запис — текст і очікувані факти,
+тест перевіряє лише вказані поля. Новий формат повідомлень = новий кейс + правка правила.
+
+## Треки
+
+![Кореляція](diagrams/04-correlation.png)
+
+**Дублікат**: той самий район, клас і подія за ±3 хв з іншого повідомлення. Зберігається як Observation з `duplicate_of`,
+прив'язується до треку оригіналу (provenance), інше джерело підвищує впевненість оригіналу. Стан треку не змінює.
+
+**Кореляція**: кандидати — активні треки тієї ж категорії з сумісним класом, `last_seen` ±2 год. Бал кожного:
+
+```
+time      = 1 − Δt / вікно класу                     (БпЛА 60 хв, крилаті 25, балістика 10)
+space     = 1 − 0.5·d / dmax,  dmax = v_max·Δt + радіуси районів + 30 км;  0, якщо d > dmax
+direction = 1 − Δкут / 180                            (0.5, якщо напрямок невідомий)
+class     = 1 та сама модель · 0.9 те саме сімейство · 0.7 один бік неконкретний · 0.2–0.3 різні моделі/сімейства
+total     = 0.30·time + 0.35·space + 0.15·direction + 0.20·class
+```
+`total ≤ 0.3` (не приєднувати), якщо стрибок фізично неможливий або **те саме джерело** за < 8 хв назвало інший район,
+до якого об'єкт не міг долетіти — джерело перелічує різні об'єкти. Приєднання при `total ≥ 0.6` (`AttachThreshold`), інакше
+новий трек. Розклад балів зберігається в `threat_track_observations.association_reason`.
+
+**Оновлення треку**: класифікація лише уточнюється (сімейство → модель), новіший факт рухає останній район, шлях і напрямок,
+старіший (out-of-order) лише додає provenance. `track_confidence` = найкраща впевненість факту, +1 за ≥ 2 джерела,
++1 за ≥ 3 повідомлення (не вище High).
+
+**Закриття**: «відбій тривоги» / «загроза минула» в області закриває її треки (`Cancelled`); `TrackWatchdog` щохвилини
+закриває треки без оновлень 2 × вікно класу (`Closed`, `timeout`).
+
+**Ревізії**: після кожної зміни — повний знімок треку в `threat_track_revisions` з часом **події** (не обробки). Стан на момент
+T = остання ревізія кожного треку з `revision_at ≤ T` — так працює історичний режим, і дочитана з Telegram історія
+відтворюється так, як розгорталася.
+
+## Дані
+
+![Модель даних](diagrams/03-data-model.png)
+
+| Таблиця | Зміст |
+|---|---|
+| `sources` | джерела, довіра, конфіг колектора |
+| `raw_messages` | оригінали; `(source_id, source_message_id)` і `hash` унікальні; `processing_status`, `attempts` |
+| `observations` | факти: подія, рівні класифікації + упевненості, локація (тип, місце, центроїд, радіус), напрямок, `duplicate_of`, `parser_metadata` |
+| `threat_tracks` / `threat_track_observations` / `threat_track_revisions` | треки, зв'язки з балами, знімки для історії |
+| `air_alerts` | інтервали тривог по областях (лише зі структурованих джерел) |
+| `places` | газетир: області/зони (полігони), населені пункти (точки), варіанти назв-стемів, радіус |
+| `threat_categories → classes → families → models`, `threat_model_aliases` | таксономія з `metadata` (швидкість, fade, вікно кореляції) та словник назв |
+| `collector_states`, `processing_errors` | курсори/здоров'я колекторів, помилки |
+
+Ланцюжок походження: карта → трек → зв'язки → факти → оригінали → джерело → URL. Нічого не видаляється.
+Схема — одна міграція; зміна моделі EF → `scripts/add-migration.ps1 <Name>`.
+
+## API
+
+| Endpoint | Що повертає |
+|---|---|
+| `GET /api/snapshot?at=&activeOnly=` | стан карти зараз (треки + тривоги) або на момент `at` з ревізій (`historical: true`) |
+| `GET /api/tracks/{id}` | трек і всі його факти з джерелом, довірою, текстом оригіналу, посиланням, балом зв'язку |
+| `GET /api/timeline?from&to&bucketMinutes` | гістограма для повзунка відтворення |
+| `GET /api/observations?since&until&limit` | стрічка спостережень (новіші перші); `until` — для вікна відтворення |
+| `GET /api/taxonomy`, `/api/sources` | довідники; в таксономії — швидкості, fade, `displayMode` |
+| `GET /api/places/search?q=`, `/api/places/regions`, `/api/places/{id}/geometry` | пошук пункту (лише центроїд), полігони регіонів і районів Києва (кеш 1 год) |
+| `GET /api/health` | БД + свіжість колекторів: `ok` / `stale` (немає успіху > 3× інтервалу → `Degraded`) / `idle` (колектор вимкнено) |
+| `/api/admin/*` | сторінка налаштувань: `settings` (GET/PUT), `status`, `sources` (GET/POST/PUT/DELETE), `telegram/code`, `test/alerts`; заголовок `X-Admin-Token` |
+| `POST /api/dev/ingest` | лише Development: вкинути повідомлення чи payload тривоги як від колектора |
+| SignalR `/hubs/map` | `TrackUpserted`, `TrackClosed`, `AlertChanged` (аргумент — той самий DTO, що й у snapshot) |
+
+`TrackDto`: `threat` (коди/назви всіх рівнів, `label` найглибшого, `displayMode`, `fadeMinutes`, `speedProfile`),
+`modelConfidence`, `trackConfidence`, `lastLocation {kind, placeId, placeName, point, accuracyKm}`, `trackGeometry`,
+`direction {degrees, kind: Compass|TowardsPlace, confidence}`, `observationCount`, `distinctSourceCount`. JSON camelCase,
+`null` пропускаються, геометрія — GeoJSON.
+
+![Реальний час і історія](diagrams/05-realtime-history.png)
+
+Після розриву з'єднання клієнт перечитує snapshot — події не буферизуються. У режимі історії події ігноруються.
+
+## Карта і ETA
+
+`web/src`: `api/` (типи, fetch, SignalR), `store/useStore.ts` (zustand: треки, тривоги, фільтри, точка, тема, режим),
+`map/` (GeoJSON-шари, MapLibre), `eta/`, `components/`. Кожні 15 с `tick()` перераховує fade і ETA.
+
+Шари: тривоги — заливка області; «останній відомий район» — полігон області з пунктирним контуром (не точка);
+шлях — суцільна лінія по фактах; прогноз — пунктир на 30 хв у заявленому напрямку (факт і прогноз завжди виглядають
+по-різному); маркер-стрілка за курсом, блідне за профілем класу (1.0 → 0.2 через `fadeMinutes` → 0 через 2×).
+Клік → картка (тип/модель, «N хв тому», курс, ETA, впевненості) → «Джерела / Деталі» → усі факти з оригіналами.
+Точка користувача: пошук пункту, клік на карті або геолокація за кліком; зберігається лише в `localStorage`.
+
+**ETA** (`web/src/eta/computeEta.ts`, тести `npm test`) рахується в браузері з `TrackDto`:
+
+```
+disabled, якщо !speedProfile.etaEnabled (балістика, авіація) · noLocation, якщо район невідомий · stale, якщо минуло > 2×fade
+d = відстань до центроїда;  якщо d > accuracy і |bearing→я − курс| > 45° → «не у вашому напрямку»
+eta_min = max(0, d − accuracy) / v_max − elapsed;   eta_max = (d + accuracy) / v_min − elapsed
+округлення до 5 хв: «~15–25 хв», або «< 5 хв (до ~N)», або «ймовірно вже минув»
+упевненість = упевненість курсу (без курсу — Low), −1 для області/зони, −1 якщо elapsed > fade
+```
+Ніколи не «11 хв 37 с» і ніколи не координати на сервер. Серверний варіант (передобчислення до міст для push) має
+повторювати цей алгоритм.
+
+## Експлуатація
+
+**Логи** (Serilog, JSON у Production): `RawMessage N (<source>): K observation(s)`; `no facts in "…"` — правила не
+впізнали текст; `Track N opened` / `attached to track N (score)` / `closed (reason)`; `RawMessage N failed`;
+`Collector <name> crashed; restarting in …` (backoff 5 с → 5 хв, інші колектори не зачіпаються).
+
+**Метрики** (OpenTelemetry, meter `Puluj`, експорт OTLP): `puluj.rawmessages.received{source}`,
+`puluj.source.latency{source}` (received − published), `puluj.observations.created{source,method}`,
+`puluj.parser.unmatched{source}`, `puluj.processing.errors{stage}`, `puluj.llm.calls{outcome}`.
+
+| Симптом | Куди дивитись |
+|---|---|
+| повідомлення є, маркера нема | `raw_messages.processing_status`, `processing_errors`, лог `no facts` → додати alias / кейс у корпус |
+| об'єкти злилися або розпалися | `threat_track_observations.association_reason`; `Correlation__AttachThreshold`, `SlackKm` |
+| модель визначена надто впевнено | `observations.identification_source` — який alias; його `confidence` у seed |
+| тривога не з'являється / не зникає | `air_alerts`, `collector_states`, `/api/health`; лог `unknown location` → `regions.json` |
+| порожня карта після рестарту | геодані не завантажені (`Gazetteer: 0 settlements`); Api стартував раніше за seed — перечитає за 15 с |
+| `dotnet build`: DLL locked | `scripts/dev-run.ps1 -Stop` |
+
+Перепроцесинг після покращення парсера: скинути `processing_status = 0, attempts = 0` для потрібних повідомлень і
+видалити похідні (факти, треки, ревізії) за той період — оригінали незмінні, sweeper обробить заново.
+
+## Розширення без коду
+
+| Хочу | Файл | Далі |
+|---|---|---|
+| додати канал / змінити довіру | `data/sources.json` | рестарт Worker |
+| нова назва загрози | `data/taxonomy/aliases*.json`: `{alias (стем), target: "family:SHAHED", lang, confidence, exact?, priority?}` | рестарт Worker + кейс у `data/corpus/cases.json` |
+| нова модель / швидкість / fade / вікно кореляції | `data/taxonomy/models.json`, `taxonomy.json` (`metadata`) | рестарт Worker; клієнт бере з `/api/taxonomy` |
+| розмовна назва області, нова акваторія | `data/gazetteer/regions.json` | рестарт Worker |
+| емодзі-позначення каналу | `Normalizer.EmojiWords` (єдине місце в коді) | збірка |
+
+Aliases і місця, видалені з seed-файлів, видаляються і з БД при наступному старті. Діаграми — `diagrams/build.py`
+(→ `.drawio` → `export.mjs` → `.png`), див. `diagrams/README.md`.

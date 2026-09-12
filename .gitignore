@@ -1,0 +1,16 @@
+bin/
+obj/
+*.user
+.vs/
+.idea/
+*.swp
+TestResults/
+web/node_modules/
+web/dist/
+src/Puluj.Api/wwwroot/
+.env
+data/gazetteer/*.geojson
+data/gazetteer/*.csv
+data/gazetteer/*.zip
+deploy/volumes/
+*.session

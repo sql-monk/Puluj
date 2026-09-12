@@ -1,0 +1,13 @@
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+COPY Directory.Build.props Directory.Packages.props Puluj.sln ./
+COPY src/ src/
+RUN dotnet restore src/Puluj.Worker/Puluj.Worker.csproj
+RUN dotnet publish src/Puluj.Worker/Puluj.Worker.csproj -c Release -o /app --no-restore
+
+FROM mcr.microsoft.com/dotnet/runtime:10.0
+WORKDIR /app
+COPY --from=build /app .
+COPY data/ /app/data/
+ENV DOTNET_ENVIRONMENT=Production
+ENTRYPOINT ["dotnet", "Puluj.Worker.dll"]
