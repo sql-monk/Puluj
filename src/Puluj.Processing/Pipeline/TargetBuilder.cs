@@ -10,15 +10,15 @@ using Puluj.Processing.Parsing;
 namespace Puluj.Processing.Pipeline;
 
 /// <summary>
-/// Geocoder + Classifier (spec §4): turns a ParsedFact into an Observation with honest location kinds and
+/// Geocoder + Classifier (spec §4): turns a ParsedFact into an Target with honest location kinds and
 /// confidences derived from the alias precision and the source trust level. Never invents precision.
 /// </summary>
-public sealed class ObservationBuilder(IIndexes indexes)
+public sealed class TargetBuilder(IIndexes indexes)
 {
-    public Observation Build(ParsedFact fact, RawMessage raw, Source source, string parserVersion, IdentificationMethod method, string language)
+    public Target Build(ParsedFact fact, RawMessage raw, Source source, string parserVersion, IdentificationMethod method, string language)
     {
         var gazetteer = indexes.Gazetteer;
-        var obs = new Observation
+        var obs = new Target
         {
             RawMessageId = raw.RawMessageId,
             SourceId = source.SourceId,
@@ -35,24 +35,24 @@ public sealed class ObservationBuilder(IIndexes indexes)
 
         var trustCap = source.TrustLevel switch { >= 0.85 => ConfidenceLevel.High, >= 0.6 => ConfidenceLevel.Medium, _ => ConfidenceLevel.Low };
 
-        if (fact.Threat is { } threat)
+        if (fact.Target is { } target)
         {
-            obs.ThreatCategoryId = threat.Ref.CategoryId;
-            obs.ThreatClassId = threat.Ref.ClassId;
-            obs.ThreatFamilyId = threat.Ref.FamilyId;
-            obs.ThreatModelId = threat.Ref.ModelId;
-            obs.IdentificationSource = method == IdentificationMethod.Llm ? $"{parserVersion}: {threat.MatchedText}" : threat.MatchedText;
+            obs.TargetCategoryId = target.Ref.CategoryId;
+            obs.TargetClassId = target.Ref.ClassId;
+            obs.TargetFamilyId = target.Ref.FamilyId;
+            obs.TargetModelId = target.Ref.ModelId;
+            obs.IdentificationSource = method == IdentificationMethod.Llm ? $"{parserVersion}: {target.MatchedText}" : target.MatchedText;
             // Confidence in the deepest identified level, never above what the source itself asserts.
-            obs.ModelConfidence = threat.Ref.Level is AliasTargetLevel.Model or AliasTargetLevel.Family
-                ? Min(threat.EffectiveConfidence, trustCap)
+            obs.ModelConfidence = target.Ref.Level is AliasTargetLevel.Model or AliasTargetLevel.Family
+                ? Min(target.EffectiveConfidence, trustCap)
                 : ConfidenceLevel.Unknown;
-            obs.ClassificationConfidence = Min(threat.EffectiveConfidence, trustCap);
+            obs.ClassificationConfidence = Min(target.EffectiveConfidence, trustCap);
         }
 
-        obs.ObservationConfidence = method == IdentificationMethod.Structured ? ConfidenceLevel.Confirmed : trustCap;
-        if (fact.Threat?.Hedged == true)
+        obs.Confidence = method == IdentificationMethod.Structured ? ConfidenceLevel.Confirmed : trustCap;
+        if (fact.Target?.Hedged == true)
         {
-            obs.ObservationConfidence = Lower(obs.ObservationConfidence);
+            obs.Confidence = Lower(obs.Confidence);
         }
 
         // Location: the current area if reported, otherwise the origin ("з Чернігівщини" = it is leaving that region).
@@ -174,9 +174,9 @@ public sealed class ObservationBuilder(IIndexes indexes)
             ["rules"] = new JsonArray(fact.Rules.Select(r => (JsonNode)r).ToArray()),
             ["launch"] = fact.IsLaunch,
         };
-        if (fact.Threat is { } t)
+        if (fact.Target is { } t)
         {
-            o["threat"] = new JsonObject { ["code"] = t.Ref.Code, ["level"] = t.Ref.Level.ToString(), ["text"] = t.MatchedText, ["hedged"] = t.Hedged };
+            o["target"] = new JsonObject { ["code"] = t.Ref.Code, ["level"] = t.Ref.Level.ToString(), ["text"] = t.MatchedText, ["hedged"] = t.Hedged };
         }
         o["places"] = new JsonArray(fact.Places.Select(p => (JsonNode)new JsonObject
         {

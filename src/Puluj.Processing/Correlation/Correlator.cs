@@ -8,7 +8,7 @@ using Puluj.Processing.Indexes;
 
 namespace Puluj.Processing.Correlation;
 
-/// <summary>Breakdown of an association score (stored in ThreatTrackObservation.AssociationReason).</summary>
+/// <summary>Breakdown of an association score (stored in TrackTarget.AssociationReason).</summary>
 /// <param name="DistanceKm">Between the anchor centres.</param>
 /// <param name="GapKm">Between the anchor areas themselves (0 when they overlap or touch): what the object must really have covered.</param>
 /// <param name="MaxDistanceKm">How far the areas may lie apart for the object to have covered the gap: speed × time + slack.</param>
@@ -29,7 +29,7 @@ public sealed record AssociationScore(double Total, double Time, double Space, d
 }
 
 /// <summary>
-/// Where an observation or a track "is" for correlation purposes. A located report anchors at its place; a report that
+/// Where an target or a track "is" for correlation purposes. A located report anchors at its place; a report that
 /// only names a destination ("1 БпЛА на Конотоп") anchors at the approach to that place. Admin areas carry their polygon,
 /// so a town 20 km outside an oblast is not "inside" it just because the oblast's covering radius is 150 km.
 /// </summary>
@@ -52,7 +52,7 @@ public sealed record SpatialAnchor(Coordinate Center, double AccuracyKm, int? Pl
 }
 
 /// <summary>
-/// Pure scoring of "does this observation continue that track" (spec §10): type, model/family, time, geography,
+/// Pure scoring of "does this target continue that track" (spec §10): type, model/family, time, geography,
 /// direction, count. Deterministic and side-effect free so it can be unit-tested on synthetic scenarios.
 /// </summary>
 public static class Correlator
@@ -64,16 +64,16 @@ public static class Correlator
     /// <summary>Score cap for pairs that cannot be the same object; the attach threshold is above it.</summary>
     private const double Impossible = 0.3;
 
-    public static bool ClassCompatible(Observation o, ThreatTrack t)
+    public static bool ClassCompatible(Target o, TargetTrack t)
     {
-        if (o.ThreatCategoryId is null || o.ThreatCategoryId != t.ThreatCategoryId)
+        if (o.TargetCategoryId is null || o.TargetCategoryId != t.TargetCategoryId)
         {
             return false;
         }
-        return o.ThreatClassId is null || t.ThreatClassId is null || o.ThreatClassId == t.ThreatClassId;
+        return o.TargetClassId is null || t.TargetClassId is null || o.TargetClassId == t.TargetClassId;
     }
 
-    public static SpatialAnchor? AnchorOf(Observation o, GazetteerIndex? gazetteer = null)
+    public static SpatialAnchor? AnchorOf(Target o, GazetteerIndex? gazetteer = null)
     {
         if (o.Location is not null)
         {
@@ -86,7 +86,7 @@ public static class Correlator
         return null;
     }
 
-    public static SpatialAnchor? AnchorOf(ThreatTrack t, GazetteerIndex? gazetteer = null)
+    public static SpatialAnchor? AnchorOf(TargetTrack t, GazetteerIndex? gazetteer = null)
     {
         if (t.LastLocation is null)
         {
@@ -97,10 +97,10 @@ public static class Correlator
         return new SpatialAnchor(t.LastLocation.Centroid.Coordinate, t.LastLocationAccuracyKm ?? 0, t.LastLocationPlaceId, boundary);
     }
 
-    public static AssociationScore Score(Observation o, ThreatTrack t, ClassProfile? profile, double slackKm) =>
+    public static AssociationScore Score(Target o, TargetTrack t, ClassProfile? profile, double slackKm) =>
         Score(o, t, profile, slackKm, AnchorOf(o), AnchorOf(t));
 
-    public static AssociationScore Score(Observation o, ThreatTrack t, ClassProfile? profile, double slackKm, SpatialAnchor? oAnchor, SpatialAnchor? tAnchor)
+    public static AssociationScore Score(Target o, TargetTrack t, ClassProfile? profile, double slackKm, SpatialAnchor? oAnchor, SpatialAnchor? tAnchor)
     {
         var windowMin = profile?.CorrelationWindowMinutes ?? 30;
         var minutes = Math.Abs((o.ObservedAt - t.LastSeenAt).TotalMinutes);
@@ -138,19 +138,19 @@ public static class Correlator
         }
 
         double cls;
-        if (o.ThreatModelId is not null && o.ThreatModelId == t.ThreatModelId)
+        if (o.TargetModelId is not null && o.TargetModelId == t.TargetModelId)
         {
             cls = 1;
         }
-        else if (o.ThreatModelId is not null && t.ThreatModelId is not null)
+        else if (o.TargetModelId is not null && t.TargetModelId is not null)
         {
             cls = 0.2; // both specific and different (Kh-101 vs Kalibr)
         }
-        else if (o.ThreatFamilyId is not null && o.ThreatFamilyId == t.ThreatFamilyId)
+        else if (o.TargetFamilyId is not null && o.TargetFamilyId == t.TargetFamilyId)
         {
             cls = 0.9;
         }
-        else if (o.ThreatFamilyId is not null && t.ThreatFamilyId is not null)
+        else if (o.TargetFamilyId is not null && t.TargetFamilyId is not null)
         {
             cls = 0.3;
         }

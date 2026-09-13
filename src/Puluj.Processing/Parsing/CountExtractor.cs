@@ -2,7 +2,7 @@ using Puluj.Processing.Text;
 
 namespace Puluj.Processing.Parsing;
 
-/// <summary>Object count near a threat mention: "5 БпЛА", "5х шахедів", "група", "декілька", "два".</summary>
+/// <summary>Object count near a target mention: "5 БпЛА", "5х шахедів", "група", "декілька", "два".</summary>
 public static class CountExtractor
 {
     private static readonly Dictionary<string, int> Words = new()
@@ -19,10 +19,10 @@ public static class CountExtractor
 
     private static readonly HashSet<string> ApproxMarkers = ["до", "близько", "понад", "орієнтовно", "~", "около"];
 
-    public static (int? Count, bool Approximate) Extract(Segment segment, int threatTokenIndex)
+    public static (int? Count, bool Approximate) Extract(Segment segment, int targetTokenIndex)
     {
         var tokens = segment.Tokens;
-        for (var i = Math.Max(0, threatTokenIndex - 3); i < threatTokenIndex; i++)
+        for (var i = Math.Max(0, targetTokenIndex - 3); i < targetTokenIndex; i++)
         {
             var text = tokens[i].Text;
             var t = text.TrimEnd('х', 'x');
@@ -44,7 +44,7 @@ public static class CountExtractor
             }
         }
         // "шахеди х5" / "БпЛА (5 од.)" after the mention
-        for (var i = threatTokenIndex + 1; i < Math.Min(tokens.Count, threatTokenIndex + 4); i++)
+        for (var i = targetTokenIndex + 1; i < Math.Min(tokens.Count, targetTokenIndex + 4); i++)
         {
             var t = tokens[i].Text.TrimStart('х', 'x');
             var unitFollows = i + 1 < tokens.Count && tokens[i + 1].Text is "од" or "шт" or "одиниць" or "одиниці";

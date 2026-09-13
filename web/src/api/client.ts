@@ -1,4 +1,4 @@
-import type { AlertDto, ObservationDto, PlaceDto, RegionDto, SnapshotDto, SourceDto, TimelineBucketDto, TrackDetailsDto } from './types'
+import type { AlertDto, TargetDto, PlaceDto, RegionDto, SnapshotDto, SourceDto, TimelineBucketDto, TrackDetailsDto } from './types'
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(path, { headers: { Accept: 'application/json' } })
@@ -12,11 +12,11 @@ export const api = {
   snapshot: (at?: Date, activeOnly = true) =>
     get<SnapshotDto>(`/api/snapshot?activeOnly=${activeOnly}${at ? `&at=${encodeURIComponent(at.toISOString())}` : ''}`),
   track: (id: number) => get<TrackDetailsDto>(`/api/tracks/${id}`),
-  observations: (sinceHours = 6, limit = 300) =>
-    get<ObservationDto[]>(`/api/observations?since=${encodeURIComponent(new Date(Date.now() - sinceHours * 3600_000).toISOString())}&limit=${limit}`),
-  /** Every observation inside a replay window, newest first. */
-  observationsBetween: (from: Date, to: Date, limit = 5000) =>
-    get<ObservationDto[]>(`/api/observations?since=${encodeURIComponent(from.toISOString())}&until=${encodeURIComponent(to.toISOString())}&limit=${limit}`),
+  targets: (sinceHours = 6, limit = 300) =>
+    get<TargetDto[]>(`/api/targets?since=${encodeURIComponent(new Date(Date.now() - sinceHours * 3600_000).toISOString())}&limit=${limit}`),
+  /** Every target inside a replay window, newest first. */
+  targetsBetween: (from: Date, to: Date, limit = 5000) =>
+    get<TargetDto[]>(`/api/targets?since=${encodeURIComponent(from.toISOString())}&until=${encodeURIComponent(to.toISOString())}&limit=${limit}`),
   regions: () => get<RegionDto[]>('/api/places/regions'),
   sources: () => get<SourceDto[]>('/api/sources'),
   /** Alerts of one place over the last `hours`, ended ones included, newest first. */

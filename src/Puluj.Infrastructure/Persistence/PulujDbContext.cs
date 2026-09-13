@@ -8,18 +8,19 @@ public class PulujDbContext(DbContextOptions<PulujDbContext> options) : DbContex
     public DbSet<Source> Sources => Set<Source>();
     public DbSet<RawMessage> RawMessages => Set<RawMessage>();
 
-    public DbSet<ThreatCategory> ThreatCategories => Set<ThreatCategory>();
-    public DbSet<ThreatClass> ThreatClasses => Set<ThreatClass>();
-    public DbSet<ThreatFamily> ThreatFamilies => Set<ThreatFamily>();
-    public DbSet<ThreatModel> ThreatModels => Set<ThreatModel>();
-    public DbSet<ThreatModelAlias> ThreatModelAliases => Set<ThreatModelAlias>();
+    public DbSet<TargetCategory> TargetCategories => Set<TargetCategory>();
+    public DbSet<TargetClass> TargetClasses => Set<TargetClass>();
+    public DbSet<TargetFamily> TargetFamilies => Set<TargetFamily>();
+    public DbSet<TargetModel> TargetModels => Set<TargetModel>();
+    public DbSet<TargetModelAlias> TargetModelAliases => Set<TargetModelAlias>();
 
     public DbSet<Place> Places => Set<Place>();
 
-    public DbSet<Observation> Observations => Set<Observation>();
-    public DbSet<ThreatTrack> ThreatTracks => Set<ThreatTrack>();
-    public DbSet<ThreatTrackObservation> ThreatTrackObservations => Set<ThreatTrackObservation>();
-    public DbSet<ThreatTrackRevision> ThreatTrackRevisions => Set<ThreatTrackRevision>();
+    public DbSet<Target> Targets => Set<Target>();
+    public DbSet<TargetTrack> TargetTracks => Set<TargetTrack>();
+    public DbSet<TrackTarget> TrackTargets => Set<TrackTarget>();
+    public DbSet<TargetLink> TargetLinks => Set<TargetLink>();
+    public DbSet<TargetTrackRevision> TargetTrackRevisions => Set<TargetTrackRevision>();
 
     public DbSet<AirAlert> AirAlerts => Set<AirAlert>();
     public DbSet<CollectorState> CollectorStates => Set<CollectorState>();

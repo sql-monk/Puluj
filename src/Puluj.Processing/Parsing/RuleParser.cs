@@ -6,7 +6,7 @@ namespace Puluj.Processing.Parsing;
 
 /// <summary>
 /// Deterministic parser: alias dictionary + gazetteer + a handful of phrase rules.
-/// One segment produces one fact per distinct threat mention; list-style messages inherit the threat from a header line.
+/// One segment produces one fact per distinct target mention; list-style messages inherit the target from a header line.
 /// </summary>
 public sealed class RuleParser(IIndexes indexes) : IParser
 {
@@ -18,7 +18,7 @@ public sealed class RuleParser(IIndexes indexes) : IParser
     {
         var taxonomy = indexes.Taxonomy;
         var gazetteer = indexes.Gazetteer;
-        var threatMatcher = new ThreatMatcher(taxonomy);
+        var targetMatcher = new TargetMatcher(taxonomy);
         var placeMatcher = new PlaceMatcher(gazetteer);
 
         // Pass 1: regions mentioned anywhere give context for ambiguous settlement names in pass 2.
@@ -38,18 +38,18 @@ public sealed class RuleParser(IIndexes indexes) : IParser
 
         var facts = new List<ParsedFact>();
         int? sectionRegion = null;            // "Сумщина:" — the lines below are about that oblast
-        ThreatMention? headerThreat = null;   // "Шахеди:" — applies to every following line
-        ThreatMention? carryThreat = null;    // "Балістика!" followed by "Дніпро — в укриття!" — applies to the next line only
+        TargetMention? headerTarget = null;   // "Шахеди:" — applies to every following line
+        TargetMention? carryTarget = null;    // "Балістика!" followed by "Дніпро — в укриття!" — applies to the next line only
         int? carryFactIndex = null;
         foreach (var segment in message.Segments)
         {
             var rules = new List<string>();
-            var threats = Collapse(threatMatcher.Match(segment, ctx));
-            var reserved = threats.Select(t => (t.TokenIndex, t.TokenCount)).ToHashSet();
+            var targets = Collapse(targetMatcher.Match(segment, ctx));
+            var reserved = targets.Select(t => (t.TokenIndex, t.TokenCount)).ToHashSet();
             var places = placeMatcher.Match(segment, ctx, contextRegions, reserved, sectionRegion);
             // A line that is only an oblast name ("Сумщина:", "Чернігівщина") heads a section: it locates the lines
             // below it, and it is not a sighting by itself.
-            if (threats.Count == 0 && places.Count == 1 && (places[0].Place.Level is PlaceLevel.Region or PlaceLevel.NamedArea || places[0].Place is { Level: PlaceLevel.City, ParentId: null })
+            if (targets.Count == 0 && places.Count == 1 && (places[0].Place.Level is PlaceLevel.Region or PlaceLevel.NamedArea || places[0].Place is { Level: PlaceLevel.City, ParentId: null })
                 && (segment.Text.TrimEnd().EndsWith(':') || segment.Tokens.Count <= 2))
             {
                 sectionRegion = places[0].Place.PlaceId;
@@ -57,13 +57,13 @@ public sealed class RuleParser(IIndexes indexes) : IParser
             }
             // Under a section header a sighting that names no place we know is at least somewhere in that oblast.
             var sectionRules = new List<string>();
-            if (sectionRegion is int sr && places.Count == 0 && threats.Count > 0 && gazetteer.Get(sr) is { } sectionPlace)
+            if (sectionRegion is int sr && places.Count == 0 && targets.Count > 0 && gazetteer.Get(sr) is { } sectionPlace)
             {
                 places = [new PlaceMention(sectionPlace, PlaceRole.Current, sectionPlace.Name, 0, 0, 0)];
                 sectionRules.Add("section_region");
             }
             var direction = DirectionExtractor.Extract(segment);
-            var (eventType, eventRule, launch) = EventTypeMatcher.Match(segment, threats.Count > 0);
+            var (eventType, eventRule, launch) = EventTypeMatcher.Match(segment, targets.Count > 0);
             var alertLevel = AlertLevelExtractor.Extract(segment);
             if (eventRule is not null)
             {
@@ -72,42 +72,42 @@ public sealed class RuleParser(IIndexes indexes) : IParser
             rules.AddRange(sectionRules);
 
             var isHeader = segment.Text.TrimEnd().EndsWith(':');
-            if (threats.Count > 0 && isHeader && places.Count == 0)
+            if (targets.Count > 0 && isHeader && places.Count == 0)
             {
-                headerThreat = threats[0];
-                rules.Add("header_threat");
-                if (eventType is EventType.ThreatObserved or EventType.Unknown)
+                headerTarget = targets[0];
+                rules.Add("header_target");
+                if (eventType is EventType.TargetObserved or EventType.Unknown)
                 {
                     continue; // "Шахеди:" — facts come from the lines below
                 }
             }
-            if (threats.Count == 0 && (places.Count > 0 || direction is not null) && eventType is EventType.Unknown or EventType.ThreatObserved)
+            if (targets.Count == 0 && (places.Count > 0 || direction is not null) && eventType is EventType.Unknown or EventType.TargetObserved)
             {
-                if (carryThreat is not null)
+                if (carryTarget is not null)
                 {
-                    threats = [carryThreat];
-                    eventType = EventType.ThreatObserved;
-                    rules.Add("inherit_previous_threat");
+                    targets = [carryTarget];
+                    eventType = EventType.TargetObserved;
+                    rules.Add("inherit_previous_target");
                 }
-                else if (headerThreat is not null)
+                else if (headerTarget is not null)
                 {
-                    threats = [headerThreat];
-                    eventType = EventType.ThreatObserved;
-                    rules.Add("inherit_header_threat");
+                    targets = [headerTarget];
+                    eventType = EventType.TargetObserved;
+                    rules.Add("inherit_header_target");
                 }
             }
-            if (rules.Contains("inherit_previous_threat") && carryFactIndex is int idx && idx < facts.Count)
+            if (rules.Contains("inherit_previous_target") && carryFactIndex is int idx && idx < facts.Count)
             {
                 facts.RemoveAt(idx); // the bare "Балістика!" line is superseded by the located line that follows it
             }
-            carryThreat = threats.Count > 0 && places.Count == 0 && !rules.Contains("inherit_previous_threat") ? threats[0] : null;
-            carryFactIndex = carryThreat is null ? null : facts.Count;
-            if (threats.Count == 0 && eventType == EventType.Unknown)
+            carryTarget = targets.Count > 0 && places.Count == 0 && !rules.Contains("inherit_previous_target") ? targets[0] : null;
+            carryFactIndex = carryTarget is null ? null : facts.Count;
+            if (targets.Count == 0 && eventType == EventType.Unknown)
             {
                 continue;
             }
 
-            if (threats.Count == 0)
+            if (targets.Count == 0)
             {
                 facts.Add(new ParsedFact
                 {
@@ -123,11 +123,11 @@ public sealed class RuleParser(IIndexes indexes) : IParser
                 continue;
             }
 
-            foreach (var threat in threats)
+            foreach (var target in targets)
             {
-                var (count, approx) = CountExtractor.Extract(segment, threat.TokenIndex);
-                var factRules = new List<string>(rules) { $"alias:{threat.MatchedText}" };
-                if (threat.Hedged)
+                var (count, approx) = CountExtractor.Extract(segment, target.TokenIndex);
+                var factRules = new List<string>(rules) { $"alias:{target.MatchedText}" };
+                if (target.Hedged)
                 {
                     factRules.Add("hedged");
                 }
@@ -135,9 +135,9 @@ public sealed class RuleParser(IIndexes indexes) : IParser
                 {
                     SegmentIndex = segment.Index,
                     SegmentText = segment.Text,
-                    EventType = eventType == EventType.Unknown ? EventType.ThreatObserved : eventType,
+                    EventType = eventType == EventType.Unknown ? EventType.TargetObserved : eventType,
                     AlertLevel = alertLevel,
-                    Threat = threat,
+                    Target = target,
                     Count = count,
                     CountIsApproximate = approx,
                     Places = places,
@@ -151,9 +151,9 @@ public sealed class RuleParser(IIndexes indexes) : IParser
     }
 
     /// <summary>Drops duplicate mentions ("🛵 ... шахеди") and generic ones covered by a more specific mention of the same category ("БпЛА ... шахеди").</summary>
-    private static IReadOnlyList<ThreatMention> Collapse(IReadOnlyList<ThreatMention> mentions)
+    private static IReadOnlyList<TargetMention> Collapse(IReadOnlyList<TargetMention> mentions)
     {
-        var result = new List<ThreatMention>();
+        var result = new List<TargetMention>();
         foreach (var m in mentions.OrderByDescending(x => (int)x.Ref.Level).ThenBy(x => x.TokenIndex))
         {
             var covered = result.Any(r => r.Ref.Code == m.Ref.Code

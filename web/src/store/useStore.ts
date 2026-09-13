@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AlertDto, DisplayMode, ObservationDto, RegionDto, SourceDto, TrackDto } from '../api/types'
+import type { AlertDto, DisplayMode, TargetDto, RegionDto, SourceDto, TrackDto } from '../api/types'
 import type { Home } from '../eta/computeEta'
 import { getPalette, type MapPalette } from '../map/palette'
 
@@ -40,7 +40,7 @@ export interface Filters {
   /** Forecast cone and dashed centreline ahead of the marker. */
   forecast: boolean
   /** Highlight tracks near the viewer's point or heading towards it (needs a home point). */
-  threats: boolean
+  highlightTargets: boolean
   /** Source ids to show; null = every source. Tracks need at least one selected source, feed items their own. */
   sources: number[] | null
   /** How long after its last message a target stays on the map, minutes. */
@@ -62,8 +62,8 @@ interface State {
   /** Left panel (filters) shown; persisted so it stays hidden once the viewer folds it. */
   panelOpen: boolean
   selectedTrackId: number | null
-  /** Feed of recent observations, newest first (live mode only). */
-  observations: ObservationDto[]
+  /** Feed of recent targets, newest first (live mode only). */
+  targets: TargetDto[]
   /** Oblast clicked on the map: highlighted border + feed filter. */
   selectedRegionId: number | null
   loading: boolean
@@ -82,8 +82,8 @@ interface State {
   setTheme: (t: Theme) => void
   setPanelOpen: (open: boolean) => void
   select: (id: number | null) => void
-  setObservations: (list: ObservationDto[]) => void
-  addObservation: (o: ObservationDto) => void
+  setTargets: (list: TargetDto[]) => void
+  addTarget: (o: TargetDto) => void
   selectRegion: (id: number | null) => void
   setLoading: (v: boolean) => void
   setError: (e: string | null) => void
@@ -124,7 +124,7 @@ export const defaultFilters: Filters = {
   activeOnly: true,
   crumbs: false,
   forecast: true,
-  threats: true,
+  highlightTargets: true,
   sources: null,
   lifetimeMinutes: 15,
 }
@@ -145,7 +145,7 @@ export const useStore = create<State>((set) => ({
   // Phones start with the panel folded (it is a bottom sheet there); desktops start with it open.
   panelOpen: load<boolean>(PANEL_KEY, typeof window !== 'undefined' && window.innerWidth >= 768),
   selectedTrackId: null,
-  observations: [],
+  targets: [],
   selectedRegionId: null,
   loading: false,
   error: null,
@@ -189,9 +189,9 @@ export const useStore = create<State>((set) => ({
     set({ panelOpen })
   },
   select: (selectedTrackId) => set({ selectedTrackId }),
-  setObservations: (observations) => set({ observations }),
-  addObservation: (o) =>
-    set((s) => (s.mode === 'live' && !s.observations.some((x) => x.id === o.id) ? { observations: [o, ...s.observations].slice(0, 500) } : {})),
+  setTargets: (targets) => set({ targets }),
+  addTarget: (o) =>
+    set((s) => (s.mode === 'live' && !s.targets.some((x) => x.id === o.id) ? { targets: [o, ...s.targets].slice(0, 500) } : {})),
   selectRegion: (selectedRegionId) => set({ selectedRegionId }),
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error }),

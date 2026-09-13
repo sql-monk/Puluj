@@ -14,5 +14,5 @@ public enum PulujEventType
     TrackUpserted,
     TrackClosed,
     AlertChanged,
-    ObservationCreated,
+    TargetCreated,
 }

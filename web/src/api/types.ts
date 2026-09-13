@@ -13,7 +13,7 @@ export interface SpeedProfile {
   etaEnabled: boolean
 }
 
-export interface ThreatDto {
+export interface TargetTypeDto {
   categoryCode: string
   categoryName: string
   classCode?: string
@@ -59,7 +59,7 @@ export interface TrackDto {
   id: number
   status: TrackStatus
   closedReason?: string
-  threat: ThreatDto
+  type: TargetTypeDto
   modelConfidence: Confidence
   trackConfidence: Confidence
   firstSeenAt: string
@@ -69,13 +69,13 @@ export interface TrackDto {
   trackGeometry?: LineString
   direction?: DirectionDto
   objectCount?: number
-  observationCount: number
+  targetCount: number
   distinctSourceCount: number
-  /** Ids of the sources whose observations make up the track (feeds the per-source filter and the badge). */
+  /** Ids of the sources whose targets make up the track (feeds the per-source filter and the badge). */
   sourceIds: number[]
   /** The last few distinct reported positions, oldest first, the current one last. */
   fixes: FixDto[]
-  /** Raw messages behind the newest observations: tracks sharing one are neighbours by message. */
+  /** Raw messages behind the newest targets: tracks sharing one are neighbours by message. */
   messageIds: number[]
 }
 
@@ -119,14 +119,22 @@ export interface RawMessageDto {
   url?: string
 }
 
-export interface ObservationDto {
+/** A link from a target to another one: earlier ("from") or later ("to"), and how they relate. */
+export interface TargetLinkDto {
+  targetId: number
+  kind: 'Continuation' | 'Split' | 'Merge' | 'Possible' | 'Duplicate'
+  confidence: number
+  direction: 'from' | 'to'
+}
+
+export interface TargetDto {
   id: number
   observedAt: string
   eventType: string
-  threat?: ThreatDto
+  type?: TargetTypeDto
   modelConfidence: Confidence
   classificationConfidence: Confidence
-  observationConfidence: Confidence
+  confidence: Confidence
   location?: LocationDto
   origin?: LocationDto
   destination?: LocationDto
@@ -136,17 +144,19 @@ export interface ObservationDto {
   identificationMethod: string
   identificationSource?: string
   segmentText?: string
-  duplicateOfObservationId?: number
+  duplicateOfTargetId?: number
   associationConfidence?: number
   source: SourceDto
   rawMessage: RawMessageDto
-  /** Track the observation was attached to (feed highlighting), if any. */
+  /** Track the target was attached to (feed highlighting), if any. */
   trackId?: number
+  /** Links to related targets (only filled in track details). */
+  links?: TargetLinkDto[]
 }
 
 export interface TrackDetailsDto {
   track: TrackDto
-  observations: ObservationDto[]
+  targets: TargetDto[]
 }
 
 export interface PlaceDto {
@@ -173,7 +183,7 @@ export interface RegionDto {
 
 export interface TimelineBucketDto {
   from: string
-  observations: number
+  targets: number
   tracksOpened: number
   alerts: number
 }

@@ -64,7 +64,7 @@ public sealed class PipelineTests : IAsyncLifetime
         await using var db = await _services.GetRequiredService<IDbContextFactory<PulujDbContext>>().CreateDbContextAsync();
         await db.Database.ExecuteSqlRawAsync("CREATE EXTENSION IF NOT EXISTS postgis");
         await db.Database.MigrateAsync();
-        await db.Database.ExecuteSqlRawAsync("TRUNCATE threat_track_observations, threat_track_revisions, threat_tracks, observations, air_alerts, processing_errors, raw_messages RESTART IDENTITY CASCADE");
+        await db.Database.ExecuteSqlRawAsync("TRUNCATE track_targets, target_track_revisions, target_tracks, targets, air_alerts, processing_errors, raw_messages RESTART IDENTITY CASCADE");
         foreach (var seeder in _services.GetServices<ISeeder>().OrderBy(s => s.Order))
         {
             await seeder.SeedAsync(db, CancellationToken.None);
@@ -85,7 +85,7 @@ public sealed class PipelineTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Raw_messages_become_observations_tracks_and_revisions()
+    public async Task Raw_messages_become_targets_tracks_and_revisions()
     {
         if (_services is null)
         {
@@ -114,19 +114,19 @@ public sealed class PipelineTests : IAsyncLifetime
 
         await using (var db = await factory.CreateDbContextAsync())
         {
-            var track = await db.ThreatTracks.SingleAsync();
+            var track = await db.TargetTracks.SingleAsync();
             Assert.Equal(TrackStatus.Active, track.Status);
-            Assert.Equal(2, track.ObservationCount);
+            Assert.Equal(2, track.TargetCount);
             Assert.Equal("Полтавська область", await db.Places.Where(p => p.PlaceId == track.LastLocationPlaceId).Select(p => p.Name).SingleAsync());
             Assert.Null(track.TrackGeometry); // two adjacent oblasts overlap: a line between their centres is not a route
-            Assert.Equal(2, await db.ThreatTrackRevisions.CountAsync(r => r.ThreatTrackId == track.ThreatTrackId));
-            Assert.Equal(2, await db.ThreatTrackObservations.CountAsync());
+            Assert.Equal(2, await db.TargetTrackRevisions.CountAsync(r => r.TargetTrackId == track.TargetTrackId));
+            Assert.Equal(2, await db.TrackTargets.CountAsync());
             Assert.Equal(ProcessingStatus.Processed, (await db.RawMessages.FindAsync(first.RawMessageId))!.ProcessingStatus);
 
             // Replay: before the second message only the first revision exists.
             var replayAt = t0.AddMinutes(10);
-            var revision = await db.ThreatTrackRevisions.Where(r => r.RevisionAt <= replayAt).OrderByDescending(r => r.RevisionAt).FirstAsync();
-            Assert.Equal(1, revision.ObservationCount);
+            var revision = await db.TargetTrackRevisions.Where(r => r.RevisionAt <= replayAt).OrderByDescending(r => r.RevisionAt).FirstAsync();
+            Assert.Equal(1, revision.TargetCount);
         }
 
         // A levelled alert stated in text (Kyiv oblast administration style) becomes an AirAlert interval with its level,
@@ -138,7 +138,7 @@ public sealed class PipelineTests : IAsyncLifetime
             var alert = await db.AirAlerts.SingleAsync(a => a.SourceAlertId.StartsWith("text:"));
             Assert.Equal(AirAlertLevel.Yellow, alert.Level);
             Assert.Null(alert.EndedAt);
-            Assert.Equal(1, await db.ThreatTracks.CountAsync()); // the named cause is not a sighting
+            Assert.Equal(1, await db.TargetTracks.CountAsync()); // the named cause is not a sighting
         }
         var cancel = await ingestor.IngestAsync(Msg(sourceId, "m4", t0.AddMinutes(50), "Київська область — відбій повітряної тривоги."), "tg_kpszsu", CancellationToken.None);
         Assert.Equal(1, await processor.ProcessAsync(cancel.RawMessageId!.Value, CancellationToken.None));

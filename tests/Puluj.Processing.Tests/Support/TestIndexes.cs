@@ -37,7 +37,7 @@ public static class TestIndexes
     {
         var tax = Read<TaxonomyFile>("data/taxonomy/taxonomy.json");
         var models = Read<ModelsFile>("data/taxonomy/models.json");
-        var refs = new Dictionary<(AliasTargetLevel, int), ThreatRef>();
+        var refs = new Dictionary<(AliasTargetLevel, int), TargetRef>();
         var catIds = new Dictionary<string, int>();
         var classIds = new Dictionary<string, int>();
         var familyIds = new Dictionary<string, int>();
@@ -47,13 +47,13 @@ public static class TestIndexes
         foreach (var c in tax.Categories)
         {
             catIds[c.Code] = next;
-            refs[(AliasTargetLevel.Category, next)] = new ThreatRef(next, null, null, null, c.Code, c.Name, AliasTargetLevel.Category);
+            refs[(AliasTargetLevel.Category, next)] = new TargetRef(next, null, null, null, c.Code, c.Name, AliasTargetLevel.Category);
             next++;
         }
         foreach (var c in tax.Classes)
         {
             classIds[c.Code] = next;
-            refs[(AliasTargetLevel.Class, next)] = new ThreatRef(catIds[c.Category], next, null, null, c.Code, c.Name, AliasTargetLevel.Class);
+            refs[(AliasTargetLevel.Class, next)] = new TargetRef(catIds[c.Category], next, null, null, c.Code, c.Name, AliasTargetLevel.Class);
             profiles[next] = ClassProfile.FromMetadata(next, c.Code, c.Metadata is null ? null : JsonDocument.Parse(c.Metadata.Value.GetRawText()));
             next++;
         }
@@ -61,14 +61,14 @@ public static class TestIndexes
         {
             familyIds[f.Code] = next;
             var cls = refs[(AliasTargetLevel.Class, classIds[f.Class])];
-            refs[(AliasTargetLevel.Family, next)] = new ThreatRef(cls.CategoryId, cls.ClassId, next, null, f.Code, f.Name, AliasTargetLevel.Family);
+            refs[(AliasTargetLevel.Family, next)] = new TargetRef(cls.CategoryId, cls.ClassId, next, null, f.Code, f.Name, AliasTargetLevel.Family);
             next++;
         }
         foreach (var m in models.Models)
         {
             modelIds[m.Code] = next;
             var fam = refs[(AliasTargetLevel.Family, familyIds[m.Family])];
-            refs[(AliasTargetLevel.Model, next)] = new ThreatRef(fam.CategoryId, fam.ClassId, fam.FamilyId, next, m.Code, m.Name, AliasTargetLevel.Model);
+            refs[(AliasTargetLevel.Model, next)] = new TargetRef(fam.CategoryId, fam.ClassId, fam.FamilyId, next, m.Code, m.Name, AliasTargetLevel.Model);
             next++;
         }
 

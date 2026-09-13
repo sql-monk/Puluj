@@ -62,9 +62,9 @@ export default function ReplayBar({ onClose }: { onClose: () => void }) {
     const bucketMin = Math.max(1, Math.round(totalMin / 72))
     api.timeline(from, to, bucketMin).then(setBuckets).catch(() => setBuckets([]))
     api
-      .observationsBetween(from, to)
-      .then((list) => useStore.getState().setObservations(list))
-      .catch(() => useStore.getState().setObservations([]))
+      .targetsBetween(from, to)
+      .then((list) => useStore.getState().setTargets(list))
+      .catch(() => useStore.getState().setTargets([]))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [from, to])
 
@@ -108,7 +108,7 @@ export default function ReplayBar({ onClose }: { onClose: () => void }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [seek, from, to, onClose])
 
-  const maxObs = Math.max(1, ...buckets.map((b) => b.observations))
+  const maxObs = Math.max(1, ...buckets.map((b) => b.targets))
   const btn = 'rounded px-2 py-1 text-sm hover:bg-slate-200 disabled:opacity-40 dark:hover:bg-slate-700'
   const chip = (active: boolean) => `rounded px-2 py-0.5 text-xs ${active ? 'bg-blue-600 text-white' : 'bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600'}`
 
@@ -152,7 +152,7 @@ export default function ReplayBar({ onClose }: { onClose: () => void }) {
         <div className="absolute inset-0 flex items-end gap-px">
           {buckets.map((b) => (
             <div key={b.from} className="relative flex-1">
-              <div className="bg-slate-400/60 dark:bg-slate-500/60" style={{ height: `${Math.max(2, (b.observations / maxObs) * 40)}px` }} />
+              <div className="bg-slate-400/60 dark:bg-slate-500/60" style={{ height: `${Math.max(2, (b.targets / maxObs) * 40)}px` }} />
               {b.alerts > 0 && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-red-500" />}
             </div>
           ))}

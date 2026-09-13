@@ -9,7 +9,7 @@ function track(overrides: Partial<TrackDto> = {}): TrackDto {
   return {
     id: 1,
     status: 'Active',
-    threat: {
+    type: {
       categoryCode: 'UAV',
       categoryName: 'БпЛА',
       classCode: 'STRIKE_UAV',
@@ -32,7 +32,7 @@ function track(overrides: Partial<TrackDto> = {}): TrackDto {
     // Chernihiv region centroid, ~150 km NNE of Kyiv, heading SW.
     lastLocation: { kind: 'Region', placeId: 1, placeName: 'Чернігівська область', point: { type: 'Point', coordinates: [31.9, 51.4] }, accuracyKm: 40 },
     direction: { degrees: 225, kind: 'Compass', confidence: 'High' },
-    observationCount: 2,
+    targetCount: 2,
     distinctSourceCount: 1,
     ...overrides,
   }
@@ -63,9 +63,9 @@ describe('computeEta', () => {
     expect(r.kind).toBe('notTowards')
   })
 
-  it('is unknown for ballistic threats (ETA disabled)', () => {
+  it('is unknown for ballistic targets (ETA disabled)', () => {
     const t = track()
-    t.threat = { ...t.threat, speedProfile: { etaEnabled: false }, displayMode: 'ballistic' }
+    t.type = { ...t.type, speedProfile: { etaEnabled: false }, displayMode: 'ballistic' }
     expect(computeEta(t, KYIV, NOW)).toEqual({ kind: 'unknown', reason: 'disabled' })
   })
 

@@ -11,7 +11,7 @@ public enum PlaceRole
     Transit,
 }
 
-public sealed record ThreatMention(ThreatRef Ref, string MatchedText, ConfidenceLevel ImpliedConfidence, bool Hedged, int TokenIndex, int TokenCount)
+public sealed record TargetMention(TargetRef Ref, string MatchedText, ConfidenceLevel ImpliedConfidence, bool Hedged, int TokenIndex, int TokenCount)
 {
     /// <summary>Confidence after applying hedges ("ймовірно") — never above the alias itself.</summary>
     public ConfidenceLevel EffectiveConfidence => Hedged
@@ -24,13 +24,13 @@ public sealed record PlaceMention(PlaceEntry Place, PlaceRole Role, string Match
 
 public sealed record DirectionMention(double Degrees, DirectionKind Kind, string Text);
 
-/// <summary>One fact extracted from one text segment. Everything a downstream stage needs to build an Observation.</summary>
+/// <summary>One fact extracted from one text segment. Everything a downstream stage needs to build an Target.</summary>
 public sealed record ParsedFact
 {
     public required int SegmentIndex { get; init; }
     public required string SegmentText { get; init; }
     public required EventType EventType { get; init; }
-    public ThreatMention? Threat { get; init; }
+    public TargetMention? Target { get; init; }
     public int? Count { get; init; }
     public bool CountIsApproximate { get; init; }
     public IReadOnlyList<PlaceMention> Places { get; init; } = [];

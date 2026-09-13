@@ -5,7 +5,7 @@ namespace Puluj.Contracts;
 /// <summary>Class/model behaviour the client needs for fading and ETA (spec §12, §17). Speeds are ranges, never a single number.</summary>
 public sealed record SpeedProfileDto(double? MinKmh, double? MaxKmh, bool EtaEnabled);
 
-public sealed record ThreatDto(
+public sealed record TargetTypeDto(
     string CategoryCode, string CategoryName,
     string? ClassCode, string? ClassName,
     string? FamilyCode, string? FamilyName,
@@ -28,7 +28,7 @@ public sealed record TrackDto(
     long Id,
     string Status,
     string? ClosedReason,
-    ThreatDto Threat,
+    TargetTypeDto Type,
     string ModelConfidence,
     string TrackConfidence,
     DateTimeOffset FirstSeenAt,
@@ -38,12 +38,12 @@ public sealed record TrackDto(
     LineString? TrackGeometry,
     DirectionDto? Direction,
     int? ObjectCount,
-    int ObservationCount,
+    int TargetCount,
     int DistinctSourceCount,
     IReadOnlyList<int> SourceIds,
     /// <summary>The last few distinct reported positions, oldest first, the current one last.</summary>
     IReadOnlyList<FixDto> Fixes,
-    /// <summary>Raw messages behind the newest observations: tracks sharing one are "neighbours by message".</summary>
+    /// <summary>Raw messages behind the newest targets: tracks sharing one are "neighbours by message".</summary>
     IReadOnlyList<long> MessageIds);
 
 /// <param name="Level">Unknown | Yellow | Red (regional administrations publish levels; alerts.in.ua does not).</param>
@@ -56,15 +56,15 @@ public sealed record SourceDto(int Id, string Code, string Name, string Type, do
 
 public sealed record RawMessageDto(long Id, string SourceMessageId, DateTimeOffset PublishedAt, DateTimeOffset ReceivedAt, string? Text, string? Url);
 
-/// <summary>One observation with its full provenance chain (spec §18, §31).</summary>
-public sealed record ObservationDto(
+/// <summary>One target with its full provenance chain (spec §18, §31).</summary>
+public sealed record TargetDto(
     long Id,
     DateTimeOffset ObservedAt,
     string EventType,
-    ThreatDto? Threat,
+    TargetTypeDto? Type,
     string ModelConfidence,
     string ClassificationConfidence,
-    string ObservationConfidence,
+    string Confidence,
     LocationDto? Location,
     LocationDto? Origin,
     LocationDto? Destination,
@@ -74,13 +74,17 @@ public sealed record ObservationDto(
     string IdentificationMethod,
     string? IdentificationSource,
     string? SegmentText,
-    long? DuplicateOfObservationId,
+    long? DuplicateOfTargetId,
     double? AssociationConfidence,
     SourceDto Source,
     RawMessageDto RawMessage,
-    long? TrackId);
+    long? TrackId,
+    IReadOnlyList<TargetLinkDto> Links);
 
-public sealed record TrackDetailsDto(TrackDto Track, IReadOnlyList<ObservationDto> Observations);
+/// <summary>A link from this target to another: which one, how ("continuation", "split", "merge", "possible", "duplicate"), how sure, and whether the other one is earlier ("from") or later ("to").</summary>
+public sealed record TargetLinkDto(long TargetId, string Kind, double Confidence, string Direction);
+
+public sealed record TrackDetailsDto(TrackDto Track, IReadOnlyList<TargetDto> Targets);
 
 public sealed record PlaceDto(int Id, string Name, string Level, int? ParentId, string? ParentName, double Lon, double Lat, double RadiusKm, int Population);
 
@@ -93,7 +97,7 @@ public sealed record TaxonomyClassDto(int Id, string Code, string Name, string D
 public sealed record TaxonomyCategoryDto(int Id, string Code, string Name, IReadOnlyList<TaxonomyClassDto> Classes);
 public sealed record TaxonomyDto(IReadOnlyList<TaxonomyCategoryDto> Categories);
 
-public sealed record TimelineBucketDto(DateTimeOffset From, int Observations, int TracksOpened, int Alerts);
+public sealed record TimelineBucketDto(DateTimeOffset From, int Targets, int TracksOpened, int Alerts);
 
 /// <summary>Development-only: inject a message as a collector would. Payload (optional) is stored as RawPayload, e.g. an alerts.in.ua alert.</summary>
 public sealed record IngestRequest(string SourceCode, string? Text, DateTimeOffset? PublishedAt, string? SourceMessageId, System.Text.Json.JsonElement? Payload);

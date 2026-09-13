@@ -8,7 +8,9 @@ python docs/diagrams/build.py     # перегенерувати *.drawio
 node docs/diagrams/export.mjs     # перегенерувати *.png (потрібен пакет playwright з chromium: npm i playwright && npx playwright install chromium)
 ```
 
-`export.mjs` рендерить через embed.diagrams.net у headless Chromium — desktop-версія draw.io не потрібна.
+`export.mjs` рендерить через embed.diagrams.net у headless Chromium — desktop-версія draw.io не потрібна. Embed відповідає
+лише батьківському вікну, тому скрипт тримає його в iframe на службовій сторінці. Змінна `DIAGRAMS_DIR` дозволяє запускати
+скрипт з іншої теки (де встановлено playwright).
 Якщо діаграму відредаговано вручну у draw.io, перенесіть зміни в `build.py`, інакше наступний `build.py` їх перезапише.
 
 | Файл | Зміст |

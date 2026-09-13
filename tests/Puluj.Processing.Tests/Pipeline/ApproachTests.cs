@@ -27,11 +27,11 @@ public class ApproachTests
     [Fact]
     public void Destination_inside_the_city_gets_an_approach_anchor_short_of_it()
     {
-        Assert.True(ObservationBuilder.DestinationInside(Troieshchyna, Kyiv));
-        var (point, accuracy) = ObservationBuilder.ApproachAnchor(Troieshchyna, 180);
+        Assert.True(TargetBuilder.DestinationInside(Troieshchyna, Kyiv));
+        var (point, accuracy) = TargetBuilder.ApproachAnchor(Troieshchyna, 180);
         // 15 km north of the district, heading south into it.
         Assert.InRange(point.Y, Troieshchyna.Centroid.Y + 0.12, Troieshchyna.Centroid.Y + 0.15);
         Assert.InRange(point.X, Troieshchyna.Centroid.X - 0.01, Troieshchyna.Centroid.X + 0.01);
-        Assert.Equal(ObservationBuilder.ApproachKm, accuracy);
+        Assert.Equal(TargetBuilder.ApproachKm, accuracy);
     }
 }

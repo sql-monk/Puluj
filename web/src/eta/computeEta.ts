@@ -50,7 +50,7 @@ export function distanceToRegionKm(home: Home, geometry: Geometry): number | nul
 
 /** @param regionsById Region polygons, when the caller has them: sharpens the bounds for region-level reports. */
 export function computeEta(track: TrackDto, home: Home, now: Date, regionsById?: Map<number, RegionDto>): EtaResult {
-  const profile = track.threat.speedProfile
+  const profile = track.type.speedProfile
   if (!profile.etaEnabled) {
     return { kind: 'unknown', reason: 'disabled' }
   }
@@ -71,7 +71,7 @@ export function computeEta(track: TrackDto, home: Home, now: Date, regionsById?:
   const edgeKm = region ? distanceToRegionKm(home, region.geometry) : null
   const elapsedMin = (now.getTime() - new Date(track.lastSeenAt).getTime()) / 60000
 
-  if (elapsedMin > track.threat.fadeMinutes * 2) {
+  if (elapsedMin > track.type.fadeMinutes * 2) {
     return { kind: 'unknown', reason: 'stale', distanceKm }
   }
 
@@ -100,7 +100,7 @@ export function computeEta(track: TrackDto, home: Home, now: Date, regionsById?:
   if (loc.kind === 'Region' || loc.kind === 'Area') {
     confidence = lower(confidence)
   }
-  if (elapsedMin > track.threat.fadeMinutes) {
+  if (elapsedMin > track.type.fadeMinutes) {
     confidence = lower(confidence)
   }
 

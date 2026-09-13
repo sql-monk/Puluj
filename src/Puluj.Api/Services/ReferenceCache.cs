@@ -15,10 +15,10 @@ public sealed class ReferenceCache(IDbContextFactory<PulujDbContext> factory, IL
 
     public sealed record PlaceInfo(int Id, string Name, PlaceLevel Level, int? ParentId, string CountryCode, double Lon, double Lat, double RadiusKm, int Population);
 
-    public IReadOnlyDictionary<int, ThreatCategory> Categories { get; private set; } = new Dictionary<int, ThreatCategory>();
-    public IReadOnlyDictionary<int, ThreatClass> Classes { get; private set; } = new Dictionary<int, ThreatClass>();
-    public IReadOnlyDictionary<int, ThreatFamily> Families { get; private set; } = new Dictionary<int, ThreatFamily>();
-    public IReadOnlyDictionary<int, ThreatModel> Models { get; private set; } = new Dictionary<int, ThreatModel>();
+    public IReadOnlyDictionary<int, TargetCategory> Categories { get; private set; } = new Dictionary<int, TargetCategory>();
+    public IReadOnlyDictionary<int, TargetClass> Classes { get; private set; } = new Dictionary<int, TargetClass>();
+    public IReadOnlyDictionary<int, TargetFamily> Families { get; private set; } = new Dictionary<int, TargetFamily>();
+    public IReadOnlyDictionary<int, TargetModel> Models { get; private set; } = new Dictionary<int, TargetModel>();
     public IReadOnlyDictionary<int, PlaceInfo> Places { get; private set; } = new Dictionary<int, PlaceInfo>();
     public IReadOnlyDictionary<int, Source> Sources { get; private set; } = new Dictionary<int, Source>();
     public TaxonomyDto Taxonomy { get; private set; } = new([]);
@@ -81,10 +81,10 @@ public sealed class ReferenceCache(IDbContextFactory<PulujDbContext> factory, IL
     public async Task RefreshAsync(CancellationToken ct)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
-        Categories = await db.ThreatCategories.AsNoTracking().ToDictionaryAsync(x => x.ThreatCategoryId, ct);
-        Classes = await db.ThreatClasses.AsNoTracking().ToDictionaryAsync(x => x.ThreatClassId, ct);
-        Families = await db.ThreatFamilies.AsNoTracking().ToDictionaryAsync(x => x.ThreatFamilyId, ct);
-        Models = await db.ThreatModels.AsNoTracking().ToDictionaryAsync(x => x.ThreatModelId, ct);
+        Categories = await db.TargetCategories.AsNoTracking().ToDictionaryAsync(x => x.TargetCategoryId, ct);
+        Classes = await db.TargetClasses.AsNoTracking().ToDictionaryAsync(x => x.TargetClassId, ct);
+        Families = await db.TargetFamilies.AsNoTracking().ToDictionaryAsync(x => x.TargetFamilyId, ct);
+        Models = await db.TargetModels.AsNoTracking().ToDictionaryAsync(x => x.TargetModelId, ct);
         Sources = await db.Sources.AsNoTracking().ToDictionaryAsync(x => x.SourceId, ct);
         Places = (await db.Places.AsNoTracking()
                 .Select(p => new { p.PlaceId, p.Name, p.Level, p.ParentId, p.CountryCode, p.Centroid, p.RadiusKm, p.Population })
@@ -95,16 +95,16 @@ public sealed class ReferenceCache(IDbContextFactory<PulujDbContext> factory, IL
         logger.LogInformation("Reference cache: {Models} models, {Places} places", Models.Count, Places.Count);
     }
 
-    private TaxonomyDto BuildTaxonomy() => new(Categories.Values.OrderBy(c => c.ThreatCategoryId).Select(c => new TaxonomyCategoryDto(
-        c.ThreatCategoryId, c.Code, c.Name,
-        Classes.Values.Where(k => k.ThreatCategoryId == c.ThreatCategoryId).OrderBy(k => k.ThreatClassId).Select(k =>
+    private TaxonomyDto BuildTaxonomy() => new(Categories.Values.OrderBy(c => c.TargetCategoryId).Select(c => new TaxonomyCategoryDto(
+        c.TargetCategoryId, c.Code, c.Name,
+        Classes.Values.Where(k => k.TargetCategoryId == c.TargetCategoryId).OrderBy(k => k.TargetClassId).Select(k =>
         {
-            var (display, fade) = Display(k.ThreatClassId);
-            return new TaxonomyClassDto(k.ThreatClassId, k.Code, k.Name, display, fade, SpeedProfile(k.ThreatClassId, null),
-                Families.Values.Where(f => f.ThreatClassId == k.ThreatClassId).OrderBy(f => f.ThreatFamilyId).Select(f =>
-                    new TaxonomyFamilyDto(f.ThreatFamilyId, f.Code, f.Name,
-                        Models.Values.Where(m => m.ThreatFamilyId == f.ThreatFamilyId && m.Enabled).OrderBy(m => m.ThreatModelId).Select(m =>
-                            new TaxonomyModelDto(m.ThreatModelId, m.Code, m.CanonicalName, m.Manufacturer, m.Country, SpeedProfile(k.ThreatClassId, m.ThreatModelId))).ToList())).ToList());
+            var (display, fade) = Display(k.TargetClassId);
+            return new TaxonomyClassDto(k.TargetClassId, k.Code, k.Name, display, fade, SpeedProfile(k.TargetClassId, null),
+                Families.Values.Where(f => f.TargetClassId == k.TargetClassId).OrderBy(f => f.TargetFamilyId).Select(f =>
+                    new TaxonomyFamilyDto(f.TargetFamilyId, f.Code, f.Name,
+                        Models.Values.Where(m => m.TargetFamilyId == f.TargetFamilyId && m.Enabled).OrderBy(m => m.TargetModelId).Select(m =>
+                            new TaxonomyModelDto(m.TargetModelId, m.Code, m.CanonicalName, m.Manufacturer, m.Country, SpeedProfile(k.TargetClassId, m.TargetModelId))).ToList())).ToList());
         }).ToList())).ToList());
 
     private static double? Num(JsonDocument? doc, string name) =>

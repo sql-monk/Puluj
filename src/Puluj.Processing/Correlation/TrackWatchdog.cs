@@ -43,11 +43,11 @@ public sealed class TrackWatchdog(
     {
         var now = clock.GetUtcNow();
         await using var db = await factory.CreateDbContextAsync(ct);
-        var active = await db.ThreatTracks.Where(t => t.Status == TrackStatus.Active).ToListAsync(ct);
+        var active = await db.TargetTracks.Where(t => t.Status == TrackStatus.Active).ToListAsync(ct);
         var closed = new List<long>();
         foreach (var t in active)
         {
-            var window = indexes.Taxonomy.ClassProfile(t.ThreatClassId)?.CorrelationWindowMinutes ?? 30;
+            var window = indexes.Taxonomy.ClassProfile(t.TargetClassId)?.CorrelationWindowMinutes ?? 30;
             if (now - t.LastSeenAt < TimeSpan.FromMinutes(window * options.CurrentValue.CloseAfterWindows))
             {
                 continue;
@@ -55,8 +55,8 @@ public sealed class TrackWatchdog(
             t.Status = TrackStatus.Closed;
             t.ClosedReason = "timeout";
             t.UpdatedAt = now;
-            db.ThreatTrackRevisions.Add(TrackUpdater.Revision(t, null, now));
-            closed.Add(t.ThreatTrackId);
+            db.TargetTrackRevisions.Add(TrackUpdater.Revision(t, null, now));
+            closed.Add(t.TargetTrackId);
         }
         // Free-text alerts rarely get an explicit "відбій" for every raion: expire them after a few hours.
         var staleBefore = now - Structured.TextAlertSink.MaxAge;

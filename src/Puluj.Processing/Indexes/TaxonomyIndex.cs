@@ -7,9 +7,9 @@ public sealed record AliasEntry(string Alias, string[] Words, bool Exact, AliasT
     int Priority, ConfidenceLevel ImpliedConfidence, string Language, int? SourceId);
 
 /// <summary>Fully resolved position in the hierarchy for an alias target.</summary>
-public sealed record ThreatRef(int CategoryId, int? ClassId, int? FamilyId, int? ModelId, string Code, string Name, AliasTargetLevel Level);
+public sealed record TargetRef(int CategoryId, int? ClassId, int? FamilyId, int? ModelId, string Code, string Name, AliasTargetLevel Level);
 
-/// <summary>Class-level behaviour read from ThreatClass.Metadata (spec §12, §17).</summary>
+/// <summary>Class-level behaviour read from TargetClass.Metadata (spec §12, §17).</summary>
 public sealed record ClassProfile(int ClassId, string Code, double? SpeedKmhMin, double? SpeedKmhMax, bool EtaEnabled,
     string DisplayMode, int FadeMinutes, int CorrelationWindowMinutes)
 {
@@ -32,17 +32,17 @@ public sealed record ClassProfile(int ClassId, string Code, double? SpeedKmhMin,
         m is { ValueKind: JsonValueKind.Object } o && o.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 }
 
-/// <summary>In-memory snapshot of the threat taxonomy. Immutable; replaced wholesale on refresh.</summary>
+/// <summary>In-memory snapshot of the target taxonomy. Immutable; replaced wholesale on refresh.</summary>
 public sealed class TaxonomyIndex(
     IReadOnlyList<AliasEntry> aliases,
-    IReadOnlyDictionary<(AliasTargetLevel, int), ThreatRef> refs,
+    IReadOnlyDictionary<(AliasTargetLevel, int), TargetRef> refs,
     IReadOnlyDictionary<int, ClassProfile> classProfiles,
     IReadOnlyDictionary<string, int> categoryIdsByCode,
     IReadOnlyDictionary<string, int> classIdsByCode)
 {
     public IReadOnlyList<AliasEntry> Aliases { get; } = aliases;
 
-    public ThreatRef? Resolve(AliasTargetLevel level, int id) => refs.TryGetValue((level, id), out var r) ? r : null;
+    public TargetRef? Resolve(AliasTargetLevel level, int id) => refs.TryGetValue((level, id), out var r) ? r : null;
 
     public ClassProfile? ClassProfile(int? classId) => classId is int id && classProfiles.TryGetValue(id, out var p) ? p : null;
 
@@ -50,6 +50,6 @@ public sealed class TaxonomyIndex(
 
     public int? ClassId(string code) => classIdsByCode.TryGetValue(code, out var id) ? id : null;
 
-    public static TaxonomyIndex Empty { get; } = new([], new Dictionary<(AliasTargetLevel, int), ThreatRef>(),
+    public static TaxonomyIndex Empty { get; } = new([], new Dictionary<(AliasTargetLevel, int), TargetRef>(),
         new Dictionary<int, ClassProfile>(), new Dictionary<string, int>(), new Dictionary<string, int>());
 }

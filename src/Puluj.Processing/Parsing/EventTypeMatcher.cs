@@ -3,7 +3,7 @@ using Puluj.Processing.Text;
 
 namespace Puluj.Processing.Parsing;
 
-/// <summary>Spec §11 event types from key phrases. Threat presence is decided elsewhere.</summary>
+/// <summary>Spec §11 event types from key phrases. Target presence is decided elsewhere.</summary>
 public static class EventTypeMatcher
 {
     private static readonly (string[] Phrase, EventType Type)[] Phrases =
@@ -12,12 +12,12 @@ public static class EventTypeMatcher
         (["відбій", "повітрян"], EventType.AlertCancelled),
         (["отбой", "тревог"], EventType.AlertCancelled),
         (["відбій"], EventType.AlertCancelled),
-        (["загроз", "минул"], EventType.ThreatCancelled),
-        (["загрозу", "знято"], EventType.ThreatCancelled),
-        (["відбій", "загроз"], EventType.ThreatCancelled),
-        (["загроз", "відсутн"], EventType.ThreatCancelled),
-        (["не", "фіксу"], EventType.ThreatCancelled),
-        (["чисто"], EventType.ThreatCancelled),
+        (["загроз", "минул"], EventType.TargetCancelled),
+        (["загрозу", "знято"], EventType.TargetCancelled),
+        (["відбій", "загроз"], EventType.TargetCancelled),
+        (["загроз", "відсутн"], EventType.TargetCancelled),
+        (["не", "фіксу"], EventType.TargetCancelled),
+        (["чисто"], EventType.TargetCancelled),
         (["повітрян", "тривог"], EventType.AirRaidAlert),
         (["оголошен", "тривог"], EventType.AirRaidAlert),
         (["воздушн", "тревог"], EventType.AirRaidAlert),
@@ -64,7 +64,7 @@ public static class EventTypeMatcher
 
     private static readonly string[] LaunchStems = ["пуск", "зліт", "злет", "запуск", "взлет"];
 
-    public static (EventType Type, string? Rule, bool Launch) Match(Segment segment, bool hasThreat)
+    public static (EventType Type, string? Rule, bool Launch) Match(Segment segment, bool hasTarget)
     {
         var tokens = segment.Tokens;
         // "повітряна тривога, жовтий рівень: дронова загроза" is an alert whose cause is named, not a sighting.
@@ -78,14 +78,14 @@ public static class EventTypeMatcher
                 {
                     continue;
                 }
-                // "тривога" alone in a sentence that also names a threat is a header, not the fact.
-                if (type == EventType.AirRaidAlert && hasThreat && !hasLevel)
+                // "тривога" alone in a sentence that also names a target is a header, not the fact.
+                if (type == EventType.AirRaidAlert && hasTarget && !hasLevel)
                 {
                     break;
                 }
                 return (type, "event:" + string.Join('_', phrase), launch);
             }
         }
-        return (hasThreat ? EventType.ThreatObserved : EventType.Unknown, null, launch);
+        return (hasTarget ? EventType.TargetObserved : EventType.Unknown, null, launch);
     }
 }

@@ -12,7 +12,7 @@ namespace Puluj.Processing.Structured;
 
 /// <summary>
 /// Handles RawMessages produced by the alerts.in.ua collector (payload kind alert.started / alert.finished):
-/// maintains AirAlert intervals and emits AirRaidAlert / AlertCancelled observations without any NLP.
+/// maintains AirAlert intervals and emits AirRaidAlert / AlertCancelled targets without any NLP.
 /// </summary>
 public sealed class AlertsInUaHandler(IIndexes indexes, INormalizer normalizer, ILogger<AlertsInUaHandler> logger)
 {
@@ -23,7 +23,7 @@ public sealed class AlertsInUaHandler(IIndexes indexes, INormalizer normalizer, 
         && raw.RawPayload.RootElement.TryGetProperty("kind", out var k)
         && k.GetString() is "alert.started" or "alert.finished";
 
-    public async Task<List<Observation>> HandleAsync(PulujDbContext db, RawMessage raw, Source source, CancellationToken ct)
+    public async Task<List<Target>> HandleAsync(PulujDbContext db, RawMessage raw, Source source, CancellationToken ct)
     {
         var root = raw.RawPayload!.RootElement;
         var kind = root.GetProperty("kind").GetString()!;
@@ -73,7 +73,7 @@ public sealed class AlertsInUaHandler(IIndexes indexes, INormalizer normalizer, 
             existing.EndRawMessageId = raw.RawMessageId;
         }
 
-        var obs = new Observation
+        var obs = new Target
         {
             RawMessageId = raw.RawMessageId,
             SourceId = source.SourceId,
@@ -84,8 +84,8 @@ public sealed class AlertsInUaHandler(IIndexes indexes, INormalizer normalizer, 
             IdentificationMethod = IdentificationMethod.Structured,
             IdentificationSource = "alerts.in.ua",
             ParserVersion = Version,
-            ObservationConfidence = ConfidenceLevel.Confirmed,
-            LocationKind = place is null ? LocationKind.Unknown : Pipeline.ObservationBuilder.KindFor(place.Level),
+            Confidence = ConfidenceLevel.Confirmed,
+            LocationKind = place is null ? LocationKind.Unknown : Pipeline.TargetBuilder.KindFor(place.Level),
             LocationPlaceId = place?.PlaceId,
             Location = place?.Centroid,
             LocationAccuracyKm = place?.RadiusKm,

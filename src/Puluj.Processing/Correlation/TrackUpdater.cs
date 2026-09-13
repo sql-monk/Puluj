@@ -6,15 +6,15 @@ using Puluj.Processing.Indexes;
 
 namespace Puluj.Processing.Correlation;
 
-/// <summary>Applies an observation to a track and produces the append-only revision (spec §20). Pure functions over entities.</summary>
+/// <summary>Applies an target to a track and produces the append-only revision (spec §20). Pure functions over entities.</summary>
 public static class TrackUpdater
 {
-    public static ThreatTrack CreateTrack(Observation o, DateTimeOffset now, PlaceEntry? destination = null, double? approachBearing = null)
+    public static TargetTrack CreateTrack(Target o, DateTimeOffset now, PlaceEntry? destination = null, double? approachBearing = null)
     {
-        var t = new ThreatTrack
+        var t = new TargetTrack
         {
             Status = TrackStatus.Active,
-            ThreatCategoryId = o.ThreatCategoryId!.Value,
+            TargetCategoryId = o.TargetCategoryId!.Value,
             FirstSeenAt = o.ObservedAt,
             LastSeenAt = o.ObservedAt,
             UpdatedAt = o.ObservedAt,
@@ -25,14 +25,14 @@ public static class TrackUpdater
     }
 
     /// <summary>
-    /// Merges the observation into the track. Older observations (out-of-order delivery) add provenance but do not move the marker.
+    /// Merges the target into the track. Older targets (out-of-order delivery) add provenance but do not move the marker.
     /// UpdatedAt is event time (never earlier than before), so revisions replay the situation as it unfolded, not as it was processed.
     /// </summary>
-    /// <param name="destination">The place the observation says the object is heading to, when it names one.</param>
+    /// <param name="destination">The place the target says the object is heading to, when it names one.</param>
     /// <param name="approachBearing">Course from the hostile side towards that destination (GazetteerIndex.ApproachBearingTo), when known.</param>
-    public static void Apply(ThreatTrack t, Observation o, DateTimeOffset now, bool isNewer, PlaceEntry? destination = null, double? approachBearing = null)
+    public static void Apply(TargetTrack t, Target o, DateTimeOffset now, bool isNewer, PlaceEntry? destination = null, double? approachBearing = null)
     {
-        t.ObservationCount++;
+        t.TargetCount++;
         if (o.ObservedAt > t.UpdatedAt)
         {
             t.UpdatedAt = o.ObservedAt;
@@ -43,13 +43,13 @@ public static class TrackUpdater
         }
 
         // Classification only becomes more specific, never less; equal specificity keeps the higher confidence.
-        var oDepth = Depth(o.ThreatModelId, o.ThreatFamilyId, o.ThreatClassId);
-        var tDepth = Depth(t.ThreatModelId, t.ThreatFamilyId, t.ThreatClassId);
+        var oDepth = Depth(o.TargetModelId, o.TargetFamilyId, o.TargetClassId);
+        var tDepth = Depth(t.TargetModelId, t.TargetFamilyId, t.TargetClassId);
         if (oDepth > tDepth || (oDepth == tDepth && o.ModelConfidence > t.ModelConfidence))
         {
-            t.ThreatClassId = o.ThreatClassId ?? t.ThreatClassId;
-            t.ThreatFamilyId = o.ThreatFamilyId ?? t.ThreatFamilyId;
-            t.ThreatModelId = o.ThreatModelId ?? t.ThreatModelId;
+            t.TargetClassId = o.TargetClassId ?? t.TargetClassId;
+            t.TargetFamilyId = o.TargetFamilyId ?? t.TargetFamilyId;
+            t.TargetModelId = o.TargetModelId ?? t.TargetModelId;
             t.ModelConfidence = o.ModelConfidence;
         }
         if (o.ObjectCount is int n && (t.ObjectCount is null || isNewer))
@@ -64,8 +64,8 @@ public static class TrackUpdater
 
         t.LastSeenAt = o.ObservedAt;
         t.LastSourceId = o.SourceId;
-        t.LastObservationId = o.ObservationId;
-        // "з Чернігівщини на Київ" locates the observation at a coarse origin only for want of anything better; once the
+        t.LastTargetId = o.TargetId;
+        // "з Чернігівщини на Київ" locates the target at a coarse origin only for want of anything better; once the
         // track has a position, repeating such an origin must not drag the marker (and the path) back to it.
         // A precise origin ("з Броварів") is a real position and moves the track.
         var locatedAtOrigin = o.LocationPlaceId is not null && o.LocationPlaceId == o.OriginPlaceId && t.LastLocation is not null
@@ -93,7 +93,7 @@ public static class TrackUpdater
                 AppendToGeometry(t, previousOnPath ? previous!.Centroid : null, o.Location.Centroid);
             }
 
-            // Real movement between located observations gives a direction when the source reported none;
+            // Real movement between located targets gives a direction when the source reported none;
             // it never overrides a direction the source stated.
             if (o.DirectionDeg is null && moved && (t.DirectionDeg is null || t.DirectionConfidence <= ConfidenceLevel.Low))
             {
@@ -120,13 +120,13 @@ public static class TrackUpdater
     /// ten minutes ago must not keep the marker on the oblast centroid. A precise previous fix still yields the
     /// course towards the named place; the approach anchor never joins the observed path.
     /// </summary>
-    private static void ApplyDestinationOnly(ThreatTrack t, Observation o, PlaceEntry destination, double? approachBearing)
+    private static void ApplyDestinationOnly(TargetTrack t, Target o, PlaceEntry destination, double? approachBearing)
     {
         var accuracy = Math.Max(destination.RadiusKm, Correlator.DestinationAnchorKm);
         if (approachBearing is double bearing)
         {
-            // Nothing else is known: the object is short of the destination on the side threats come from, heading in.
-            var anchor = Pipeline.ObservationBuilder.ApproachAnchor(destination, bearing);
+            // Nothing else is known: the object is short of the destination on the side targets come from, heading in.
+            var anchor = Pipeline.TargetBuilder.ApproachAnchor(destination, bearing);
             t.LastLocation = anchor.Point;
             t.LastLocationKind = LocationKind.DirectionOnly;
             t.LastLocationPlaceId = destination.PlaceId;
@@ -158,30 +158,30 @@ public static class TrackUpdater
         t.LastLocationAccuracyKm = accuracy;
     }
 
-    /// <summary>Track confidence grows with corroboration: more observations, more independent sources (spec §15).</summary>
-    public static ConfidenceLevel ComputeTrackConfidence(ThreatTrack t, ConfidenceLevel bestObservationConfidence)
+    /// <summary>Track confidence grows with corroboration: more targets, more independent sources (spec §15).</summary>
+    public static ConfidenceLevel ComputeTrackConfidence(TargetTrack t, ConfidenceLevel bestConfidence)
     {
-        var score = (int)bestObservationConfidence;
+        var score = (int)bestConfidence;
         if (t.DistinctSourceCount >= 2)
         {
             score++;
         }
-        if (t.ObservationCount >= 3)
+        if (t.TargetCount >= 3)
         {
             score++;
         }
         return (ConfidenceLevel)Math.Clamp(score, (int)ConfidenceLevel.Low, (int)ConfidenceLevel.High);
     }
 
-    public static ThreatTrackRevision Revision(ThreatTrack t, long? observationId, DateTimeOffset at) => new()
+    public static TargetTrackRevision Revision(TargetTrack t, long? targetId, DateTimeOffset at) => new()
     {
         Track = t,
         RevisionAt = at,
         Status = t.Status,
-        ThreatCategoryId = t.ThreatCategoryId,
-        ThreatClassId = t.ThreatClassId,
-        ThreatFamilyId = t.ThreatFamilyId,
-        ThreatModelId = t.ThreatModelId,
+        TargetCategoryId = t.TargetCategoryId,
+        TargetClassId = t.TargetClassId,
+        TargetFamilyId = t.TargetFamilyId,
+        TargetModelId = t.TargetModelId,
         ModelConfidence = t.ModelConfidence,
         LastSeenAt = t.LastSeenAt,
         LastLocationKind = t.LastLocationKind,
@@ -194,15 +194,15 @@ public static class TrackUpdater
         DirectionConfidence = t.DirectionConfidence,
         ObjectCount = t.ObjectCount,
         TrackConfidence = t.TrackConfidence,
-        ObservationCount = t.ObservationCount,
-        ObservationId = observationId,
+        TargetCount = t.TargetCount,
+        TargetId = targetId,
     };
 
     /// <summary>Positions this precise are drawn on the observed path even without a detectable move.</summary>
     private const double PathPointKm = 50;
 
-    /// <summary>The line starts with the first located observation (kept only as LastLocation until a second point arrives).</summary>
-    private static void AppendToGeometry(ThreatTrack t, Point? previous, Point p)
+    /// <summary>The line starts with the first located target (kept only as LastLocation until a second point arrives).</summary>
+    private static void AppendToGeometry(TargetTrack t, Point? previous, Point p)
     {
         var coords = t.TrackGeometry?.Coordinates.ToList() ?? (previous is null ? [] : [previous.Coordinate.Copy()]);
         if (coords.Count > 0 && coords[^1].Equals2D(p.Coordinate))

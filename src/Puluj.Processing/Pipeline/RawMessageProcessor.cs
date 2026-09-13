@@ -15,15 +15,15 @@ using Puluj.Processing.Text;
 
 namespace Puluj.Processing.Pipeline;
 
-/// <summary>Runs after observations of one RawMessage are saved (deduplication, correlation). Implemented in the correlation stage.</summary>
-public interface IObservationSink
+/// <summary>Runs after targets of one RawMessage are saved (deduplication, correlation). Implemented in the correlation stage.</summary>
+public interface ITargetSink
 {
     /// <summary>Runs inside the message transaction; events added to <paramref name="events"/> are published after commit.</summary>
-    Task OnObservationsAsync(PulujDbContext db, IReadOnlyList<Observation> observations, Source source, ICollection<PulujEvent> events, CancellationToken ct);
+    Task OnTargetsAsync(PulujDbContext db, IReadOnlyList<Target> targets, Source source, ICollection<PulujEvent> events, CancellationToken ct);
 }
 
 /// <summary>
-/// Processes one RawMessage end-to-end (spec §4): structured payload or text -> facts -> observations -> sink.
+/// Processes one RawMessage end-to-end (spec §4): structured payload or text -> facts -> targets -> sink.
 /// All writes for a message happen in one transaction; failures are recorded in ProcessingError and retried up to MaxAttempts.
 /// </summary>
 public sealed class RawMessageProcessor(
@@ -31,9 +31,9 @@ public sealed class RawMessageProcessor(
     INormalizer normalizer,
     IParser parser,
     IIndexes indexes,
-    ObservationBuilder builder,
+    TargetBuilder builder,
     AlertsInUaHandler alertsHandler,
-    IEnumerable<IObservationSink> sinks,
+    IEnumerable<ITargetSink> sinks,
     INotifyPublisher notifier,
     IOptions<ProcessingOptions> options,
     PulujMetrics metrics,
@@ -53,14 +53,14 @@ public sealed class RawMessageProcessor(
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         try
         {
-            List<Observation> observations;
+            List<Target> targets;
             if (AlertsInUaHandler.CanHandle(raw))
             {
-                observations = await alertsHandler.HandleAsync(db, raw, source, ct);
+                targets = await alertsHandler.HandleAsync(db, raw, source, ct);
             }
             else if (!string.IsNullOrWhiteSpace(raw.RawText))
             {
-                observations = await ParseTextAsync(raw, source, ct);
+                targets = await ParseTextAsync(raw, source, ct);
             }
             else
             {
@@ -71,7 +71,7 @@ public sealed class RawMessageProcessor(
                 return 0;
             }
 
-            db.Observations.AddRange(observations);
+            db.Targets.AddRange(targets);
             raw.ProcessingStatus = ProcessingStatus.Processed;
             raw.ProcessedAt = clock.GetUtcNow();
             raw.Attempts++;
@@ -80,7 +80,7 @@ public sealed class RawMessageProcessor(
             var events = new List<PulujEvent>();
             foreach (var sink in sinks)
             {
-                await sink.OnObservationsAsync(db, observations, source, events, ct);
+                await sink.OnTargetsAsync(db, targets, source, events, ct);
             }
             await db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
@@ -89,17 +89,17 @@ public sealed class RawMessageProcessor(
                 await notifier.PublishAsync(evt, ct);
             }
 
-            if (observations.Count == 0)
+            if (targets.Count == 0)
             {
                 metrics.ParserUnmatched(source.Code);
                 logger.LogDebug("RawMessage {Id}: no facts in \"{Text}\"", raw.RawMessageId, Truncate(raw.RawText, 120));
             }
-            foreach (var o in observations)
+            foreach (var o in targets)
             {
-                metrics.ObservationCreated(source.Code, o.IdentificationMethod.ToString());
+                metrics.TargetCreated(source.Code, o.IdentificationMethod.ToString());
             }
-            logger.LogInformation("RawMessage {Id} ({Source}): {Count} observation(s) in {Ms} ms", raw.RawMessageId, source.Code, observations.Count, sw.ElapsedMilliseconds);
-            return observations.Count;
+            logger.LogInformation("RawMessage {Id} ({Source}): {Count} target(s) in {Ms} ms", raw.RawMessageId, source.Code, targets.Count, sw.ElapsedMilliseconds);
+            return targets.Count;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -113,7 +113,7 @@ public sealed class RawMessageProcessor(
         }
     }
 
-    private async Task<List<Observation>> ParseTextAsync(RawMessage raw, Source source, CancellationToken ct)
+    private async Task<List<Target>> ParseTextAsync(RawMessage raw, Source source, CancellationToken ct)
     {
         var normalized = normalizer.Normalize(raw.RawText!);
         var ctx = new ParseContext(source.SourceId, normalized.Language, HomeRegionOf(source));

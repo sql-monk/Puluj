@@ -23,5 +23,5 @@ public class RawMessage
     public DateTimeOffset? ProcessedAt { get; set; }
     public int Attempts { get; set; }
 
-    public ICollection<Observation> Observations { get; set; } = [];
+    public ICollection<Target> Targets { get; set; } = [];
 }

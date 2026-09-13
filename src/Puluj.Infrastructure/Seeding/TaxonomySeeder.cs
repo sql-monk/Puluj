@@ -8,7 +8,7 @@ using Puluj.Infrastructure.Persistence;
 
 namespace Puluj.Infrastructure.Seeding;
 
-/// <summary>Upserts the threat hierarchy and aliases from data/taxonomy/*.json. Keyed by Code, so re-runs are safe.</summary>
+/// <summary>Upserts the target hierarchy and aliases from data/taxonomy/*.json. Keyed by Code, so re-runs are safe.</summary>
 public sealed class TaxonomySeeder(SeedFiles files, IOptions<SeedOptions> options, ILogger<TaxonomySeeder> logger) : ISeeder
 {
     public int Order => 10;
@@ -28,60 +28,60 @@ public sealed class TaxonomySeeder(SeedFiles files, IOptions<SeedOptions> option
         }
         var modelsFile = await files.ReadAsync<ModelsFile>("taxonomy/models.json", ct);
 
-        var categories = await db.ThreatCategories.ToDictionaryAsync(x => x.Code, ct);
+        var categories = await db.TargetCategories.ToDictionaryAsync(x => x.Code, ct);
         foreach (var c in tax.Categories)
         {
             if (!categories.TryGetValue(c.Code, out var e))
             {
-                e = new ThreatCategory { Code = c.Code, Name = c.Name };
-                db.ThreatCategories.Add(e);
+                e = new TargetCategory { Code = c.Code, Name = c.Name };
+                db.TargetCategories.Add(e);
                 categories[c.Code] = e;
             }
             e.Name = c.Name;
         }
         await db.SaveChangesAsync(ct);
 
-        var classes = await db.ThreatClasses.ToDictionaryAsync(x => x.Code, ct);
+        var classes = await db.TargetClasses.ToDictionaryAsync(x => x.Code, ct);
         foreach (var c in tax.Classes)
         {
             if (!classes.TryGetValue(c.Code, out var e))
             {
-                e = new ThreatClass { Code = c.Code, Name = c.Name, ThreatCategoryId = categories[c.Category].ThreatCategoryId };
-                db.ThreatClasses.Add(e);
+                e = new TargetClass { Code = c.Code, Name = c.Name, TargetCategoryId = categories[c.Category].TargetCategoryId };
+                db.TargetClasses.Add(e);
                 classes[c.Code] = e;
             }
             e.Name = c.Name;
-            e.ThreatCategoryId = categories[c.Category].ThreatCategoryId;
+            e.TargetCategoryId = categories[c.Category].TargetCategoryId;
             e.Metadata = ToDoc(c.Metadata);
         }
         await db.SaveChangesAsync(ct);
 
-        var families = await db.ThreatFamilies.ToDictionaryAsync(x => x.Code, ct);
+        var families = await db.TargetFamilies.ToDictionaryAsync(x => x.Code, ct);
         foreach (var f in tax.Families)
         {
             if (!families.TryGetValue(f.Code, out var e))
             {
-                e = new ThreatFamily { Code = f.Code, Name = f.Name, ThreatClassId = classes[f.Class].ThreatClassId };
-                db.ThreatFamilies.Add(e);
+                e = new TargetFamily { Code = f.Code, Name = f.Name, TargetClassId = classes[f.Class].TargetClassId };
+                db.TargetFamilies.Add(e);
                 families[f.Code] = e;
             }
             e.Name = f.Name;
-            e.ThreatClassId = classes[f.Class].ThreatClassId;
+            e.TargetClassId = classes[f.Class].TargetClassId;
             e.Metadata = ToDoc(f.Metadata);
         }
         await db.SaveChangesAsync(ct);
 
-        var models = await db.ThreatModels.ToDictionaryAsync(x => x.Code, ct);
+        var models = await db.TargetModels.ToDictionaryAsync(x => x.Code, ct);
         foreach (var m in modelsFile?.Models ?? [])
         {
             if (!models.TryGetValue(m.Code, out var e))
             {
-                e = new ThreatModel { Code = m.Code, CanonicalName = m.Name, ThreatFamilyId = families[m.Family].ThreatFamilyId };
-                db.ThreatModels.Add(e);
+                e = new TargetModel { Code = m.Code, CanonicalName = m.Name, TargetFamilyId = families[m.Family].TargetFamilyId };
+                db.TargetModels.Add(e);
                 models[m.Code] = e;
             }
             e.CanonicalName = m.Name;
-            e.ThreatFamilyId = families[m.Family].ThreatFamilyId;
+            e.TargetFamilyId = families[m.Family].TargetFamilyId;
             e.Manufacturer = m.Manufacturer;
             e.Country = m.Country;
             e.Enabled = m.Enabled ?? true;
@@ -95,10 +95,10 @@ public sealed class TaxonomySeeder(SeedFiles files, IOptions<SeedOptions> option
     }
 
     private async Task SeedAliasesAsync(PulujDbContext db,
-        Dictionary<string, ThreatCategory> categories, Dictionary<string, ThreatClass> classes,
-        Dictionary<string, ThreatFamily> families, Dictionary<string, ThreatModel> models, CancellationToken ct)
+        Dictionary<string, TargetCategory> categories, Dictionary<string, TargetClass> classes,
+        Dictionary<string, TargetFamily> families, Dictionary<string, TargetModel> models, CancellationToken ct)
     {
-        var existing = await db.ThreatModelAliases.ToListAsync(ct);
+        var existing = await db.TargetModelAliases.ToListAsync(ct);
         var byKey = existing.ToDictionary(a => (a.Alias, a.Language, a.TargetLevel, a.TargetId));
         var seen = new HashSet<(string, string, AliasTargetLevel, int)>();
 
@@ -111,10 +111,10 @@ public sealed class TaxonomySeeder(SeedFiles files, IOptions<SeedOptions> option
                 var (level, code) = ParseTarget(a.Target);
                 int id = level switch
                 {
-                    AliasTargetLevel.Category => categories[code].ThreatCategoryId,
-                    AliasTargetLevel.Class => classes[code].ThreatClassId,
-                    AliasTargetLevel.Family => families[code].ThreatFamilyId,
-                    AliasTargetLevel.Model => models[code].ThreatModelId,
+                    AliasTargetLevel.Category => categories[code].TargetCategoryId,
+                    AliasTargetLevel.Class => classes[code].TargetClassId,
+                    AliasTargetLevel.Family => families[code].TargetFamilyId,
+                    AliasTargetLevel.Model => models[code].TargetModelId,
                     _ => throw new InvalidOperationException($"Unknown alias target level in '{a.Target}'"),
                 };
                 var alias = a.Alias.Trim().ToLowerInvariant();
@@ -123,8 +123,8 @@ public sealed class TaxonomySeeder(SeedFiles files, IOptions<SeedOptions> option
                 seen.Add(key);
                 if (!byKey.TryGetValue(key, out var e))
                 {
-                    e = new ThreatModelAlias { Alias = alias, Language = lang, TargetLevel = level, TargetId = id };
-                    db.ThreatModelAliases.Add(e);
+                    e = new TargetModelAlias { Alias = alias, Language = lang, TargetLevel = level, TargetId = id };
+                    db.TargetModelAliases.Add(e);
                     byKey[key] = e;
                 }
                 e.Priority = a.Priority ?? 10;
@@ -133,7 +133,7 @@ public sealed class TaxonomySeeder(SeedFiles files, IOptions<SeedOptions> option
             }
         }
         // Aliases removed from the seed files (and not source-specific) are removed from the database too.
-        db.ThreatModelAliases.RemoveRange(existing.Where(a => a.SourceId is null && !seen.Contains((a.Alias, a.Language, a.TargetLevel, a.TargetId))));
+        db.TargetModelAliases.RemoveRange(existing.Where(a => a.SourceId is null && !seen.Contains((a.Alias, a.Language, a.TargetLevel, a.TargetId))));
         await db.SaveChangesAsync(ct);
         logger.LogInformation("Taxonomy: {Count} aliases", seen.Count);
     }

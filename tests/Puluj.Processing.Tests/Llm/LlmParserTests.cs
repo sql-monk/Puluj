@@ -26,15 +26,15 @@ public class LlmParserTests
         var parser = Create();
         var message = new Normalizer().Normalize("Об'єкт летить над Полтавщиною на захід, може шахед.");
         const string json = """
-            {"facts":[{"eventType":"ThreatObserved","threat":{"level":"family","code":"SHAHED"},"hedged":true,"count":null,"countApprox":false,
+            {"facts":[{"eventType":"TargetObserved","target":{"level":"family","code":"SHAHED"},"hedged":true,"count":null,"countApprox":false,
               "places":[{"name":"Полтавська область","role":"current"},{"name":"Атлантида","role":"destination"}],"directionDeg":270,"launch":false,"segment":0,"quote":null}]}
             """;
         var facts = parser.MapJson(json, message);
         var f = Assert.Single(facts);
         Assert.Equal(IdentificationMethod.Llm, f.Method);
-        Assert.Equal("SHAHED", f.Threat!.Ref.Code);
-        Assert.True(f.Threat.Hedged);
-        Assert.Equal(ConfidenceLevel.Low, f.Threat.EffectiveConfidence);
+        Assert.Equal("SHAHED", f.Target!.Ref.Code);
+        Assert.True(f.Target.Hedged);
+        Assert.Equal(ConfidenceLevel.Low, f.Target.EffectiveConfidence);
         Assert.Equal("Полтавська область", Assert.Single(f.Places).Place.Name); // unknown "Атлантида" dropped, never invented
         Assert.Equal(270, f.Direction!.Degrees);
     }
@@ -44,7 +44,7 @@ public class LlmParserTests
     {
         var parser = Create();
         var message = new Normalizer().Normalize("test");
-        Assert.Empty(parser.MapJson("""{"facts":[{"eventType":"ThreatObserved","threat":{"level":"model","code":"MADE_UP"},"hedged":false,"count":null,"countApprox":false,"places":[],"directionDeg":null,"launch":false,"segment":0,"quote":null}]}""", message));
+        Assert.Empty(parser.MapJson("""{"facts":[{"eventType":"TargetObserved","target":{"level":"model","code":"MADE_UP"},"hedged":false,"count":null,"countApprox":false,"places":[],"directionDeg":null,"launch":false,"segment":0,"quote":null}]}""", message));
         Assert.Empty(parser.MapJson("""{"facts":[]}""", message));
     }
 

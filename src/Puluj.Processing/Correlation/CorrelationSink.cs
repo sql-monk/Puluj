@@ -11,29 +11,31 @@ using Puluj.Processing.Pipeline;
 namespace Puluj.Processing.Correlation;
 
 /// <summary>
-/// Deduplicator + Threat Correlator (spec §4, §10). Runs inside the message transaction:
+/// Deduplicator + Target Correlator (spec §4, §10). Runs inside the message transaction:
 /// duplicates are linked to the original's track for provenance, new facts either continue the best-scoring
-/// active track or open a new one; alert/threat cancellations close tracks in the affected region.
+/// active track or open a new one; alert/target cancellations close tracks in the affected region.
 /// </summary>
 public sealed class CorrelationSink(
     IIndexes indexes,
     IOptionsMonitor<CorrelationOptions> options,
     TimeProvider clock,
-    ILogger<CorrelationSink> logger) : IObservationSink
+    ILogger<CorrelationSink> logger) : ITargetSink
 {
     private const int CandidateWindowMinutes = 120;
+    /// <summary>Candidates scoring at least this (but below the attach threshold) are kept as "possible" links.</summary>
+    private const double PossibleThreshold = 0.45;
 
-    public async Task OnObservationsAsync(PulujDbContext db, IReadOnlyList<Observation> observations, Source source, ICollection<PulujEvent> events, CancellationToken ct)
+    public async Task OnTargetsAsync(PulujDbContext db, IReadOnlyList<Target> targets, Source source, ICollection<PulujEvent> events, CancellationToken ct)
     {
         var now = clock.GetUtcNow();
         // A message that lists several sightings lists several objects: no two facts from it may share a track.
         var usedTracks = new HashSet<long>();
-        foreach (var o in observations.OrderBy(x => x.ObservedAt))
+        foreach (var o in targets.OrderBy(x => x.ObservedAt))
         {
             switch (o.EventType)
             {
-                case EventType.ThreatObserved when o.ThreatCategoryId is not null:
-                    await HandleThreatAsync(db, o, source, events, now, usedTracks, ct);
+                case EventType.TargetObserved when o.TargetCategoryId is not null:
+                    await HandleTargetAsync(db, o, source, events, now, usedTracks, ct);
                     break;
                 case EventType.AirRaidAlert or EventType.AlertCancelled:
                     var alert = await db.AirAlerts.AsNoTracking()
@@ -47,45 +49,46 @@ public sealed class CorrelationSink(
                         await CloseTracksInRegionAsync(db, o, "alert_cancelled", events, now, ct);
                     }
                     break;
-                case EventType.ThreatCancelled:
-                    await CloseTracksInRegionAsync(db, o, "threat_cancelled", events, now, ct);
+                case EventType.TargetCancelled:
+                    await CloseTracksInRegionAsync(db, o, "target_cancelled", events, now, ct);
                     break;
             }
-            events.Add(new PulujEvent(PulujEventType.ObservationCreated, o.ObservationId, now));
+            events.Add(new PulujEvent(PulujEventType.TargetCreated, o.TargetId, now));
         }
     }
 
-    private async Task HandleThreatAsync(PulujDbContext db, Observation o, Source source, ICollection<PulujEvent> events, DateTimeOffset now, HashSet<long> usedTracks, CancellationToken ct)
+    private async Task HandleTargetAsync(PulujDbContext db, Target o, Source source, ICollection<PulujEvent> events, DateTimeOffset now, HashSet<long> usedTracks, CancellationToken ct)
     {
         var duplicateOf = await FindDuplicateAsync(db, o, ct);
         if (duplicateOf is not null)
         {
-            o.DuplicateOfObservationId = duplicateOf.ObservationId;
+            o.DuplicateOfTargetId = duplicateOf.TargetId;
             // A second, independent source confirming the same fact raises confidence of the original.
-            if (duplicateOf.SourceId != o.SourceId && duplicateOf.ObservationConfidence < ConfidenceLevel.High)
+            if (duplicateOf.SourceId != o.SourceId && duplicateOf.Confidence < ConfidenceLevel.High)
             {
-                duplicateOf.ObservationConfidence++;
+                duplicateOf.Confidence++;
             }
-            var link = await db.ThreatTrackObservations.Include(l => l.Track)
-                .FirstOrDefaultAsync(l => l.ObservationId == duplicateOf.ObservationId, ct);
+            var link = await db.TrackTargets.Include(l => l.Track)
+                .FirstOrDefaultAsync(l => l.TargetId == duplicateOf.TargetId, ct);
             if (link?.Track is { } track)
             {
-                db.ThreatTrackObservations.Add(new ThreatTrackObservation
+                db.TrackTargets.Add(new TrackTarget
                 {
-                    ThreatTrackId = track.ThreatTrackId,
-                    ObservationId = o.ObservationId,
-                    Sequence = track.ObservationCount,
+                    TargetTrackId = track.TargetTrackId,
+                    TargetId = o.TargetId,
+                    Sequence = track.TargetCount,
                     AssociationConfidence = link.AssociationConfidence,
-                    AssociationReason = System.Text.Json.JsonDocument.Parse($"{{\"duplicateOf\":{duplicateOf.ObservationId}}}"),
+                    AssociationReason = System.Text.Json.JsonDocument.Parse($"{{\"duplicateOf\":{duplicateOf.TargetId}}}"),
                 });
-                usedTracks.Add(track.ThreatTrackId);
+                usedTracks.Add(track.TargetTrackId);
+                AddLink(db, duplicateOf.TargetId, o.TargetId, TargetLinkKind.Duplicate, 1, now);
                 await RecountSourcesAsync(db, track, o.SourceId, ct);
-                track.TrackConfidence = TrackUpdater.ComputeTrackConfidence(track, await BestObservationConfidenceAsync(db, track, o, ct));
+                track.TrackConfidence = TrackUpdater.ComputeTrackConfidence(track, await BestConfidenceAsync(db, track, o, ct));
                 track.UpdatedAt = Later(track.UpdatedAt, o.ObservedAt);
-                db.ThreatTrackRevisions.Add(TrackUpdater.Revision(track, o.ObservationId, track.UpdatedAt));
-                events.Add(new PulujEvent(PulujEventType.TrackUpserted, track.ThreatTrackId, now));
+                db.TargetTrackRevisions.Add(TrackUpdater.Revision(track, o.TargetId, track.UpdatedAt));
+                events.Add(new PulujEvent(PulujEventType.TrackUpserted, track.TargetTrackId, now));
             }
-            logger.LogDebug("Observation {Id} duplicates {Original}", o.ObservationId, duplicateOf.ObservationId);
+            logger.LogDebug("Target {Id} duplicates {Original}", o.TargetId, duplicateOf.TargetId);
             return;
         }
 
@@ -94,90 +97,97 @@ public sealed class CorrelationSink(
         var oAnchor = Correlator.AnchorOf(o, indexes.Gazetteer);
         if (oAnchor is null)
         {
-            logger.LogDebug("Observation {Id} has no spatial anchor; no track", o.ObservationId);
+            logger.LogDebug("Target {Id} has no spatial anchor; no track", o.TargetId);
             return;
         }
         var destination = o.DestinationPlaceId is int destId ? indexes.Gazetteer.Get(destId) : null;
         var approach = destination is null ? null : indexes.Gazetteer.ApproachBearingTo(destination.Centroid.Coordinate);
 
-        // Candidate window is generous; the per-pair class profile (observation class, else track class) drives the score.
+        // Candidate window is generous; the per-pair class profile (target class, else track class) drives the score.
         var since = o.ObservedAt.AddMinutes(-CandidateWindowMinutes);
         var until = o.ObservedAt.AddMinutes(CandidateWindowMinutes);
-        var candidates = await db.ThreatTracks
-            .Where(t => t.Status == TrackStatus.Active && t.ThreatCategoryId == o.ThreatCategoryId && t.LastSeenAt >= since && t.LastSeenAt <= until)
+        var candidates = await db.TargetTracks
+            .Where(t => t.Status == TrackStatus.Active && t.TargetCategoryId == o.TargetCategoryId && t.LastSeenAt >= since && t.LastSeenAt <= until)
             .ToListAsync(ct);
 
-        ThreatTrack? best = null;
+        TargetTrack? best = null;
         AssociationScore? bestScore = null;
-        foreach (var t in candidates.Where(t => Correlator.ClassCompatible(o, t) && !usedTracks.Contains(t.ThreatTrackId)))
+        // Every scored candidate is remembered: the ones not chosen still become links (merge / split / possible).
+        var scored = new List<(TargetTrack Track, AssociationScore Score, bool Blocked)>();
+        foreach (var t in candidates.Where(t => Correlator.ClassCompatible(o, t)))
         {
-            var profile = indexes.Taxonomy.ClassProfile(o.ThreatClassId ?? t.ThreatClassId);
+            var profile = indexes.Taxonomy.ClassProfile(o.TargetClassId ?? t.TargetClassId);
             var score = Correlator.Score(o, t, profile, options.CurrentValue.SlackKm, oAnchor, Correlator.AnchorOf(t, indexes.Gazetteer));
-            if (score.Total >= options.CurrentValue.AttachThreshold && (bestScore is null || score.Total > bestScore.Total))
+            var blocked = usedTracks.Contains(t.TargetTrackId); // another fact of this message already continues it
+            scored.Add((t, score, blocked));
+            if (!blocked && score.Total >= options.CurrentValue.AttachThreshold && (bestScore is null || score.Total > bestScore.Total))
             {
                 best = t;
                 bestScore = score;
             }
         }
+        var predecessorOfBest = best?.LastTargetId;
 
         if (best is null)
         {
             best = TrackUpdater.CreateTrack(o, now, destination, approach);
             best.DistinctSourceCount = 1;
-            best.TrackConfidence = TrackUpdater.ComputeTrackConfidence(best, o.ObservationConfidence);
-            db.ThreatTracks.Add(best);
-            db.ThreatTrackObservations.Add(new ThreatTrackObservation
+            best.TrackConfidence = TrackUpdater.ComputeTrackConfidence(best, o.Confidence);
+            db.TargetTracks.Add(best);
+            db.TrackTargets.Add(new TrackTarget
             {
                 Track = best,
-                ObservationId = o.ObservationId,
+                TargetId = o.TargetId,
                 Sequence = 1,
                 AssociationConfidence = 1,
             });
-            db.ThreatTrackRevisions.Add(TrackUpdater.Revision(best, o.ObservationId, best.UpdatedAt));
+            db.TargetTrackRevisions.Add(TrackUpdater.Revision(best, o.TargetId, best.UpdatedAt));
             await db.SaveChangesAsync(ct);
-            logger.LogInformation("Track {Track} opened from observation {Obs}", best.ThreatTrackId, o.ObservationId);
+            logger.LogInformation("Track {Track} opened from target {Obs}", best.TargetTrackId, o.TargetId);
         }
         else
         {
             TrackUpdater.Apply(best, o, now, isNewer: o.ObservedAt >= best.LastSeenAt, destination, approach);
-            db.ThreatTrackObservations.Add(new ThreatTrackObservation
+            db.TrackTargets.Add(new TrackTarget
             {
-                ThreatTrackId = best.ThreatTrackId,
-                ObservationId = o.ObservationId,
-                Sequence = best.ObservationCount,
+                TargetTrackId = best.TargetTrackId,
+                TargetId = o.TargetId,
+                Sequence = best.TargetCount,
                 AssociationConfidence = bestScore!.Total,
                 AssociationReason = bestScore.ToJson(),
             });
             await RecountSourcesAsync(db, best, o.SourceId, ct);
-            best.TrackConfidence = TrackUpdater.ComputeTrackConfidence(best, await BestObservationConfidenceAsync(db, best, o, ct));
-            db.ThreatTrackRevisions.Add(TrackUpdater.Revision(best, o.ObservationId, best.UpdatedAt));
+            best.TrackConfidence = TrackUpdater.ComputeTrackConfidence(best, await BestConfidenceAsync(db, best, o, ct));
+            db.TargetTrackRevisions.Add(TrackUpdater.Revision(best, o.TargetId, best.UpdatedAt));
             await db.SaveChangesAsync(ct);
-            logger.LogInformation("Observation {Obs} attached to track {Track} (score {Score:F2})", o.ObservationId, best.ThreatTrackId, bestScore.Total);
+            logger.LogInformation("Target {Obs} attached to track {Track} (score {Score:F2})", o.TargetId, best.TargetTrackId, bestScore.Total);
         }
-        usedTracks.Add(best.ThreatTrackId);
-        events.Add(new PulujEvent(PulujEventType.TrackUpserted, best.ThreatTrackId, now));
+        LinkCandidates(db, o, scored, best, predecessorOfBest, bestScore, now);
+        await db.SaveChangesAsync(ct);
+        usedTracks.Add(best.TargetTrackId);
+        events.Add(new PulujEvent(PulujEventType.TrackUpserted, best.TargetTrackId, now));
     }
 
     /// <summary>Same class, same place, same event within the duplicate window, from another message.</summary>
-    private async Task<Observation?> FindDuplicateAsync(PulujDbContext db, Observation o, CancellationToken ct)
+    private async Task<Target?> FindDuplicateAsync(PulujDbContext db, Target o, CancellationToken ct)
     {
         var window = options.CurrentValue.DuplicateWindow;
         var from = o.ObservedAt - window;
         var to = o.ObservedAt + window;
-        var query = db.Observations
-            .Where(x => x.ObservationId != o.ObservationId && x.RawMessageId != o.RawMessageId
-                        && x.DuplicateOfObservationId == null
+        var query = db.Targets
+            .Where(x => x.TargetId != o.TargetId && x.RawMessageId != o.RawMessageId
+                        && x.DuplicateOfTargetId == null
                         && x.EventType == o.EventType
                         && x.ObservedAt >= from && x.ObservedAt <= to
-                        && x.ThreatCategoryId == o.ThreatCategoryId
-                        && (x.ThreatClassId == o.ThreatClassId || x.ThreatClassId == null || o.ThreatClassId == null));
+                        && x.TargetCategoryId == o.TargetCategoryId
+                        && (x.TargetClassId == o.TargetClassId || x.TargetClassId == null || o.TargetClassId == null));
         query = o.LocationPlaceId is int place
             ? query.Where(x => x.LocationPlaceId == place)
             : query.Where(x => x.LocationPlaceId == null && x.DestinationPlaceId == o.DestinationPlaceId);
         return await query.OrderBy(x => x.ObservedAt).FirstOrDefaultAsync(ct);
     }
 
-    private async Task CloseTracksInRegionAsync(PulujDbContext db, Observation o, string reason, ICollection<PulujEvent> events, DateTimeOffset now, CancellationToken ct)
+    private async Task CloseTracksInRegionAsync(PulujDbContext db, Target o, string reason, ICollection<PulujEvent> events, DateTimeOffset now, CancellationToken ct)
     {
         if (o.LocationPlaceId is not int placeId)
         {
@@ -188,7 +198,7 @@ public sealed class CorrelationSink(
         {
             return;
         }
-        var active = await db.ThreatTracks.Where(t => t.Status == TrackStatus.Active && t.LastLocationPlaceId != null).ToListAsync(ct);
+        var active = await db.TargetTracks.Where(t => t.Status == TrackStatus.Active && t.LastLocationPlaceId != null).ToListAsync(ct);
         foreach (var t in active)
         {
             var tp = indexes.Gazetteer.Get(t.LastLocationPlaceId!.Value);
@@ -196,38 +206,77 @@ public sealed class CorrelationSink(
             {
                 continue;
             }
-            // Only close tracks of the same threat kind when the cancellation names one ("відбій загрози БпЛА").
-            if (o.ThreatCategoryId is not null && o.ThreatCategoryId != t.ThreatCategoryId)
+            // Only close tracks of the same target kind when the cancellation names one ("відбій загрози БпЛА").
+            if (o.TargetCategoryId is not null && o.TargetCategoryId != t.TargetCategoryId)
             {
                 continue;
             }
             t.Status = TrackStatus.Cancelled;
             t.ClosedReason = reason;
             t.UpdatedAt = Later(t.UpdatedAt, o.ObservedAt);
-            db.ThreatTrackRevisions.Add(TrackUpdater.Revision(t, o.ObservationId, t.UpdatedAt));
-            events.Add(new PulujEvent(PulujEventType.TrackClosed, t.ThreatTrackId, now));
-            logger.LogInformation("Track {Track} closed ({Reason}) by observation {Obs}", t.ThreatTrackId, reason, o.ObservationId);
+            db.TargetTrackRevisions.Add(TrackUpdater.Revision(t, o.TargetId, t.UpdatedAt));
+            events.Add(new PulujEvent(PulujEventType.TrackClosed, t.TargetTrackId, now));
+            logger.LogInformation("Track {Track} closed ({Reason}) by target {Obs}", t.TargetTrackId, reason, o.TargetId);
         }
     }
 
     private static DateTimeOffset Later(DateTimeOffset a, DateTimeOffset b) => a > b ? a : b;
 
-    private static async Task RecountSourcesAsync(PulujDbContext db, ThreatTrack track, int currentSourceId, CancellationToken ct)
+    /// <summary>
+    /// Target-to-target links from one correlation pass. The chosen track's previous sighting continues into this one;
+    /// other tracks that also scored high enough to attach merge into it; a track already continued by another fact of
+    /// the same message splits into this one as well; weaker matches are kept as "possible".
+    /// </summary>
+    private void LinkCandidates(PulujDbContext db, Target o, List<(TargetTrack Track, AssociationScore Score, bool Blocked)> scored, TargetTrack? chosen, long? predecessorOfChosen, AssociationScore? chosenScore, DateTimeOffset now)
     {
-        var persisted = await db.ThreatTrackObservations
-            .Where(l => l.ThreatTrackId == track.ThreatTrackId)
-            .Select(l => l.Observation!.SourceId)
+        if (chosen is not null && predecessorOfChosen is long prev && chosenScore is not null)
+        {
+            AddLink(db, prev, o.TargetId, TargetLinkKind.Continuation, chosenScore.Total, now);
+        }
+        foreach (var (track, score, blocked) in scored)
+        {
+            if (track.LastTargetId is not long from || (chosen is not null && track.TargetTrackId == chosen.TargetTrackId))
+            {
+                continue;
+            }
+            if (score.Total >= options.CurrentValue.AttachThreshold)
+            {
+                // A track that could have taken this fact but did not: either it already continues into another fact
+                // of this message (the group split), or the fact continues several tracks at once (they merged).
+                AddLink(db, from, o.TargetId, blocked ? TargetLinkKind.Split : TargetLinkKind.Merge, score.Total, now);
+            }
+            else if (score.Total >= PossibleThreshold)
+            {
+                AddLink(db, from, o.TargetId, TargetLinkKind.Possible, score.Total, now);
+            }
+        }
+    }
+
+    private static void AddLink(PulujDbContext db, long from, long to, TargetLinkKind kind, double confidence, DateTimeOffset now)
+    {
+        if (from == to || db.TargetLinks.Local.Any(l => l.FromTargetId == from && l.ToTargetId == to))
+        {
+            return;
+        }
+        db.TargetLinks.Add(new TargetLink { FromTargetId = from, ToTargetId = to, Kind = kind, Confidence = Math.Round(confidence, 3), CreatedAt = now });
+    }
+
+    private static async Task RecountSourcesAsync(PulujDbContext db, TargetTrack track, int currentSourceId, CancellationToken ct)
+    {
+        var persisted = await db.TrackTargets
+            .Where(l => l.TargetTrackId == track.TargetTrackId)
+            .Select(l => l.Target!.SourceId)
             .Distinct()
             .ToListAsync(ct);
         track.DistinctSourceCount = persisted.Append(currentSourceId).Distinct().Count();
     }
 
-    private static async Task<ConfidenceLevel> BestObservationConfidenceAsync(PulujDbContext db, ThreatTrack track, Observation current, CancellationToken ct)
+    private static async Task<ConfidenceLevel> BestConfidenceAsync(PulujDbContext db, TargetTrack track, Target current, CancellationToken ct)
     {
-        var levels = await db.ThreatTrackObservations
-            .Where(l => l.ThreatTrackId == track.ThreatTrackId)
-            .Select(l => (int)l.Observation!.ObservationConfidence)
+        var levels = await db.TrackTargets
+            .Where(l => l.TargetTrackId == track.TargetTrackId)
+            .Select(l => (int)l.Target!.Confidence)
             .ToListAsync(ct);
-        return (ConfidenceLevel)levels.Append((int)current.ObservationConfidence).Max();
+        return (ConfidenceLevel)levels.Append((int)current.Confidence).Max();
     }
 }

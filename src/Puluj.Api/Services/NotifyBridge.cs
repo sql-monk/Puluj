@@ -34,10 +34,10 @@ public sealed class NotifyBridge(
                             await hub.Clients.All.TrackClosed(closed);
                         }
                         break;
-                    case PulujEventType.ObservationCreated:
-                        if (await snapshots.ObservationAsync(evt.Id, ct) is { } observation)
+                    case PulujEventType.TargetCreated:
+                        if (await snapshots.TargetAsync(evt.Id, ct) is { } target)
                         {
-                            await hub.Clients.All.ObservationCreated(observation);
+                            await hub.Clients.All.TargetCreated(target);
                         }
                         break;
                     case PulujEventType.AlertChanged:

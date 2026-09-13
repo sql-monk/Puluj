@@ -108,9 +108,9 @@ export default function App() {
     const seq = ++snapshotSeq.current
     s.setLoading(true)
     try {
-      const [snap, feed] = await Promise.all([api.snapshot(s.mode === 'history' && s.at ? s.at : undefined, false), s.mode === 'live' ? api.observations() : Promise.resolve(null)])
+      const [snap, feed] = await Promise.all([api.snapshot(s.mode === 'history' && s.at ? s.at : undefined, false), s.mode === 'live' ? api.targets() : Promise.resolve(null)])
       if (seq !== snapshotSeq.current) return
-      if (feed) useStore.getState().setObservations(feed)
+      if (feed) useStore.getState().setTargets(feed)
       // The store applies "active only" itself so toggling the filter needs no round-trip.
       useStore.getState().setSnapshot(snap.tracks, snap.alerts)
       s.setError(null)
@@ -132,7 +132,7 @@ export default function App() {
       trackUpserted: (t) => useStore.getState().upsertTrack(t),
       trackClosed: (t) => useStore.getState().upsertTrack(t),
       alertChanged: (a) => useStore.getState().upsertAlert(a),
-      observationCreated: (o) => useStore.getState().addObservation(o),
+      targetCreated: (o) => useStore.getState().addTarget(o),
       connectionChanged: (state) => {
         store.setConnection(state)
         if (state === 'connected' && useStore.getState().mode === 'live') void loadSnapshot()

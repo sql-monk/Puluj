@@ -8,7 +8,7 @@ public sealed class PulujMetrics
     public const string MeterName = "Puluj";
 
     private readonly Counter<long> _rawReceived;
-    private readonly Counter<long> _observationsCreated;
+    private readonly Counter<long> _targetsCreated;
     private readonly Counter<long> _parserUnmatched;
     private readonly Counter<long> _processingErrors;
     private readonly Histogram<double> _sourceLatency;
@@ -18,7 +18,7 @@ public sealed class PulujMetrics
     {
         var meter = meterFactory.Create(MeterName);
         _rawReceived = meter.CreateCounter<long>("puluj.rawmessages.received");
-        _observationsCreated = meter.CreateCounter<long>("puluj.observations.created");
+        _targetsCreated = meter.CreateCounter<long>("puluj.targets.created");
         _parserUnmatched = meter.CreateCounter<long>("puluj.parser.unmatched");
         _processingErrors = meter.CreateCounter<long>("puluj.processing.errors");
         _sourceLatency = meter.CreateHistogram<double>("puluj.source.latency", unit: "s", description: "ReceivedAt - PublishedAt");
@@ -32,8 +32,8 @@ public sealed class PulujMetrics
         _sourceLatency.Record(latency.TotalSeconds, tag);
     }
 
-    public void ObservationCreated(string source, string method) =>
-        _observationsCreated.Add(1, new("source", source), new("method", method));
+    public void TargetCreated(string source, string method) =>
+        _targetsCreated.Add(1, new("source", source), new("method", method));
 
     public void ParserUnmatched(string source) => _parserUnmatched.Add(1, new KeyValuePair<string, object?>("source", source));
 

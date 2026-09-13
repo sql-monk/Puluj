@@ -35,7 +35,7 @@ public sealed class PlaceMatcher(GazetteerIndex gazetteer)
         {
             if (reservedSpans.Any(s => i >= s.Item1 && i < s.Item1 + s.Item2))
             {
-                continue; // token is part of a threat alias ("Крим" inside nothing, but e.g. "Іскандер" is never a place)
+                continue; // token is part of a target alias ("Крим" inside nothing, but e.g. "Іскандер" is never a place)
             }
             if (IsUnitWord(tokens[i].Text))
             {

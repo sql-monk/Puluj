@@ -12,13 +12,13 @@ public class CorrelatorTests
     private static readonly DateTimeOffset T0 = new(2026, 9, 11, 0, 0, 0, TimeSpan.Zero);
 
     // Sumy (34.8, 50.9) -> Poltava (34.55, 49.59) is ~150 km south, ~50 min at 180 km/h.
-    private static Observation Obs(double lon, double lat, int minutes, int? model = null, double? dir = null, int? place = null) => new()
+    private static Target Obs(double lon, double lat, int minutes, int? model = null, double? dir = null, int? place = null) => new()
     {
         ObservedAt = T0.AddMinutes(minutes),
-        ThreatCategoryId = 1,
-        ThreatClassId = 1,
-        ThreatFamilyId = 1,
-        ThreatModelId = model,
+        TargetCategoryId = 1,
+        TargetClassId = 1,
+        TargetFamilyId = 1,
+        TargetModelId = model,
         Location = Geo.Point(lon, lat),
         LocationAccuracyKm = 40,
         LocationKind = LocationKind.Region,
@@ -26,8 +26,8 @@ public class CorrelatorTests
         DirectionDeg = dir,
         DirectionKind = dir is null ? DirectionKind.Unknown : DirectionKind.Compass,
         DirectionConfidence = dir is null ? ConfidenceLevel.Unknown : ConfidenceLevel.High,
-        ObservationConfidence = ConfidenceLevel.High,
-        EventType = EventType.ThreatObserved,
+        Confidence = ConfidenceLevel.High,
+        EventType = EventType.TargetObserved,
     };
 
     [Fact]
@@ -73,10 +73,10 @@ public class CorrelatorTests
         var track = TrackUpdater.CreateTrack(Obs(34.8, 50.9, 0), T0);
         Assert.Null(track.TrackGeometry);
         TrackUpdater.Apply(track, Obs(34.55, 49.59, 50, model: 10), T0.AddMinutes(50), isNewer: true);
-        Assert.Equal(10, track.ThreatModelId);
+        Assert.Equal(10, track.TargetModelId);
         Assert.NotNull(track.TrackGeometry);
         Assert.Equal(2, track.TrackGeometry!.NumPoints);
-        Assert.Equal(2, track.ObservationCount);
+        Assert.Equal(2, track.TargetCount);
         // No reported direction: derived from movement, marked as low confidence.
         Assert.Equal(DirectionKind.TowardsPlace, track.DirectionKind);
         Assert.Equal(ConfidenceLevel.Low, track.DirectionConfidence);
@@ -84,14 +84,14 @@ public class CorrelatorTests
     }
 
     [Fact]
-    public void Older_observation_does_not_move_the_marker()
+    public void Older_target_does_not_move_the_marker()
     {
         var track = TrackUpdater.CreateTrack(Obs(34.55, 49.59, 50), T0);
         var last = track.LastLocation;
         TrackUpdater.Apply(track, Obs(34.8, 50.9, 0), T0, isNewer: false);
         Assert.Same(last, track.LastLocation);
         Assert.Equal(T0, track.FirstSeenAt);
-        Assert.Equal(2, track.ObservationCount);
+        Assert.Equal(2, track.TargetCount);
     }
 
     [Fact]
@@ -188,20 +188,20 @@ public class CorrelatorTests
     private static readonly PlaceEntry Sumy = new(7, "Суми", PlaceLevel.City, null, "UA", 250_000, Geo.Point(34.8, 50.9), 5);
     private static readonly GazetteerIndex Gazetteer = new([(KyivOblast, ["київщин"]), (Brovary, ["бровар"]), (Sumy, ["сум"])]);
 
-    private static Observation DestinationOnly(int destination, int minutes) => new()
+    private static Target DestinationOnly(int destination, int minutes) => new()
     {
         ObservedAt = T0.AddMinutes(minutes),
-        ThreatCategoryId = 1,
-        ThreatClassId = 1,
-        ThreatFamilyId = 1,
+        TargetCategoryId = 1,
+        TargetClassId = 1,
+        TargetFamilyId = 1,
         LocationKind = LocationKind.DirectionOnly,
         DestinationPlaceId = destination,
         DirectionKind = DirectionKind.Unknown,
-        ObservationConfidence = ConfidenceLevel.Medium,
-        EventType = EventType.ThreatObserved,
+        Confidence = ConfidenceLevel.Medium,
+        EventType = EventType.TargetObserved,
     };
 
-    private static ThreatTrack KyivOblastTrack()
+    private static TargetTrack KyivOblastTrack()
     {
         var first = Obs(30.45, 50.30, 0, place: 5);
         first.LocationAccuracyKm = 146;

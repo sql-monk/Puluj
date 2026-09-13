@@ -130,9 +130,9 @@ export default function FilterPanel({ open, onClose, picking, onPickingChange, o
       <HomeLocationPicker picking={picking} onPickingChange={onPickingChange} />
       {home && (
         <label className="-mt-2 flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={filters.threats} onChange={(e) => setFilter('threats', e.target.checked)} />
+          <input type="checkbox" checked={filters.highlightTargets} onChange={(e) => setFilter('highlightTargets', e.target.checked)} />
           <span>
-            Підсвічувати загрози для моєї точки
+            Підсвічувати цілі, небезпечні для моєї точки
             <span className="block text-[11px] text-slate-500">червоне кільце — поруч, помаранчеве — курс у ваш бік</span>
           </span>
         </label>

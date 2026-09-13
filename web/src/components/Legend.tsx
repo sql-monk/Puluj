@@ -42,8 +42,8 @@ export default function Legend() {
         <span className="inline-block h-3 w-3 rounded-full" style={{ background: p.marker.uav, outline: `2px solid ${p.selection}` }} /> сусіди з того ж повідомлення
       </div>
       <div className="flex items-center gap-2">
-        <span className="inline-block h-3 w-3 rounded-full border-2" style={{ borderColor: p.threatNear }} /> поруч з вашою точкою
-        <span className="ml-1 inline-block h-3 w-3 rounded-full border-2" style={{ borderColor: p.threatTowards }} /> курс у ваш бік
+        <span className="inline-block h-3 w-3 rounded-full border-2" style={{ borderColor: p.hazardNear }} /> поруч з вашою точкою
+        <span className="ml-1 inline-block h-3 w-3 rounded-full border-2" style={{ borderColor: p.hazardTowards }} /> курс у ваш бік
       </div>
       <div className="flex items-center gap-2">
         <span className="inline-block h-3 w-5 outline outline-1" style={{ background: p.alertRedFill, outlineColor: p.alertRedLine }} /> повітряна тривога (червоний рівень)

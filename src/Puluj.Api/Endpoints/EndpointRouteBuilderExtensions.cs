@@ -26,9 +26,9 @@ public static class EndpointRouteBuilderExtensions
         api.MapGet("/tracks/{id:long}", async Task<Results<Ok<TrackDetailsDto>, NotFound>> (long id, SnapshotService snapshots, CancellationToken ct) =>
             await snapshots.TrackDetailsAsync(id, ct) is { } details ? TypedResults.Ok(details) : TypedResults.NotFound());
 
-        // Feed: newest observations for the side panel (default last 6 h). `until` bounds a replay window.
-        api.MapGet("/observations", async (DateTimeOffset? since, DateTimeOffset? until, int? limit, SnapshotService snapshots, TimeProvider clock, CancellationToken ct) =>
-            await snapshots.RecentObservationsAsync(since ?? clock.GetUtcNow().AddHours(-6), until, limit ?? 300, ct));
+        // Feed: newest targets for the side panel (default last 6 h). `until` bounds a replay window.
+        api.MapGet("/targets", async (DateTimeOffset? since, DateTimeOffset? until, int? limit, SnapshotService snapshots, TimeProvider clock, CancellationToken ct) =>
+            await snapshots.RecentTargetsAsync(since ?? clock.GetUtcNow().AddHours(-6), until, limit ?? 300, ct));
 
         // Alert history of one place (the region window: current alert, last one, count and total time over 24 h).
         api.MapGet("/alerts/history", async (int placeId, double? hours, SnapshotService snapshots, CancellationToken ct) =>

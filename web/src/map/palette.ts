@@ -3,7 +3,7 @@ import type { Theme } from '../store/useStore'
 
 /**
  * Everything on the map that carries colour, per theme: class markers, movement vectors, alert fills, land and
- * borders. Each theme keeps the same reading (yellow = threat level, red = alert, one colour per class) in its own
+ * borders. Each theme keeps the same reading (yellow = target level, red = alert, one colour per class) in its own
  * key, so a sepia map is not a slate map with sepia panels.
  */
 export interface MapPalette {
@@ -32,8 +32,8 @@ export interface MapPalette {
   label: string
   labelHalo: string
   home: string
-  threatNear: string
-  threatTowards: string
+  hazardNear: string
+  hazardTowards: string
   selection: string
 }
 
@@ -57,8 +57,8 @@ const light: MapPalette = {
   label: '#ffffff',
   labelHalo: '#000000',
   home: '#22c55e',
-  threatNear: '#ef4444',
-  threatTowards: '#f97316',
+  hazardNear: '#ef4444',
+  hazardTowards: '#f97316',
   selection: '#0f172a',
 }
 
@@ -82,8 +82,8 @@ const sepia: MapPalette = {
   label: '#fffaf0',
   labelHalo: '#2b1d0e',
   home: '#4d7c0f',
-  threatNear: '#b3261e',
-  threatTowards: '#c2410c',
+  hazardNear: '#b3261e',
+  hazardTowards: '#c2410c',
   selection: '#33281a',
 }
 
@@ -107,8 +107,8 @@ const graphite: MapPalette = {
   label: '#ffffff',
   labelHalo: '#1f242c',
   home: '#16a34a',
-  threatNear: '#dc3c3c',
-  threatTowards: '#ea7a1a',
+  hazardNear: '#dc3c3c',
+  hazardTowards: '#ea7a1a',
   selection: '#f5f6f8',
 }
 
@@ -132,8 +132,8 @@ const dark: MapPalette = {
   label: '#ffffff',
   labelHalo: '#000000',
   home: '#22c55e',
-  threatNear: '#ef4444',
-  threatTowards: '#f97316',
+  hazardNear: '#ef4444',
+  hazardTowards: '#f97316',
   selection: '#f8fafc',
 }
 
@@ -157,8 +157,8 @@ const midnight: MapPalette = {
   label: '#eef3ff',
   labelHalo: '#040a1c',
   home: '#34d399',
-  threatNear: '#fb7185',
-  threatTowards: '#fb923c',
+  hazardNear: '#fb7185',
+  hazardTowards: '#fb923c',
   selection: '#eef3ff',
 }
 
@@ -182,8 +182,8 @@ const olive: MapPalette = {
   label: '#f2f5ea',
   labelHalo: '#0d120a',
   home: '#9ccc3a',
-  threatNear: '#e0655c',
-  threatTowards: '#e8963a',
+  hazardNear: '#e0655c',
+  hazardTowards: '#e8963a',
   selection: '#f2f5ea',
 }
 

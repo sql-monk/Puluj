@@ -24,7 +24,7 @@ export function setTrackData(map: maplibregl.Map, layers: TrackLayers) {
   setData(map, 'track-areas', layers.areas)
 }
 
-/** Fill / outline colours for alert polygons: yellow level = threat (drones), red or unknown level = full alert. */
+/** Fill / outline colours for alert polygons: yellow level = target (drones), red or unknown level = full alert. */
 export function alertPaint(p: MapPalette): { fill: maplibregl.ExpressionSpecification; line: maplibregl.ExpressionSpecification } {
   return {
     fill: ['match', ['get', 'level'], 'Yellow', p.alertYellowFill, p.alertRedFill],
@@ -293,17 +293,17 @@ export function addTrackLayers(map: maplibregl.Map, p: MapPalette, opts: { label
     paint: { 'text-color': p.clusterText },
   })
 
-  // Threat ring: red for "near the viewer's point", orange for "heading this way". Only with the highlight on.
+  // Target ring: red for "near the viewer's point", orange for "heading this way". Only with the highlight on.
   map.addLayer({
-    id: 'track-threat-ring',
+    id: 'track-target-ring',
     type: 'circle',
     source: 'track-points',
-    filter: ['all', ['!', ['has', 'point_count']], ['!=', ['get', 'threat'], '']],
+    filter: ['all', ['!', ['has', 'point_count']], ['!=', ['get', 'hazard'], '']],
     paint: {
-      'circle-color': ['match', ['get', 'threat'], 'near', p.threatNear, p.threatTowards],
+      'circle-color': ['match', ['get', 'hazard'], 'near', p.hazardNear, p.hazardTowards],
       'circle-opacity': 0.18,
       'circle-radius': 23 * iconScale,
-      'circle-stroke-color': ['match', ['get', 'threat'], 'near', p.threatNear, p.threatTowards],
+      'circle-stroke-color': ['match', ['get', 'hazard'], 'near', p.hazardNear, p.hazardTowards],
       'circle-stroke-width': 3,
       'circle-stroke-opacity': 0.95,
     },

@@ -6,7 +6,7 @@
 - зберігає оригінальні повідомлення;
 - нормалізує, геокодує та дедуплікує їх;
 - класифікує тип та, якщо можливо, конкретну модель загрози;
-- зв'язує окремі повідомлення в логічні `ThreatTrack`;
+- зв'язує окремі повідомлення в логічні `TargetTrack`;
 - відображає їх на карті;
 - показує напрямок/історію руху;
 - оцінює орієнтовний ETA до заданої користувачем точки;
@@ -78,15 +78,15 @@ Parser / NLP
     ↓
 Geocoder
     ↓
-Observation
+Target
     ↓
 Deduplicator
     ↓
 Classifier
     ↓
-Threat Correlator
+Target Correlator
     ↓
-ThreatTrack
+TargetTrack
     ↓
 ETA / Confidence Engine
     ↓
@@ -119,16 +119,16 @@ Hash
 
 ---
 
-# 6. Observation
+# 6. Target
 
 Окремий факт, отриманий із повідомлення:
 
 ```text
-ObservationId
+TargetId
 ObservedAt
-ThreatCategory
-ThreatClass
-ThreatModelId
+TargetCategory
+TargetClass
+TargetModelId
 ModelConfidence
 ObjectCount
 Location
@@ -168,13 +168,13 @@ Unknown
 Використовувати ієрархію:
 
 ```text
-ThreatCategory
+TargetCategory
     ↓
-ThreatClass
+TargetClass
     ↓
-ThreatFamily
+TargetFamily
     ↓
-ThreatModel
+TargetModel
 ```
 
 Наприклад:
@@ -208,13 +208,13 @@ Missile
 
 ---
 
-# 8. ThreatModel
+# 8. TargetModel
 
 Довідник конкретних типів/моделей:
 
 ```text
-ThreatModelId
-ThreatClassId
+TargetModelId
+TargetClassId
 CanonicalName
 Family
 Manufacturer
@@ -226,9 +226,9 @@ Metadata
 Окремо:
 
 ```text
-ThreatModelAlias
+TargetModelAlias
 ----------------
-ThreatModelId
+TargetModelId
 Alias
 Language
 SourceId nullable
@@ -286,21 +286,21 @@ Unknown
 зберігати:
 
 ```text
-ThreatClass = CruiseMissile
-ThreatModel = Kh-101
+TargetClass = CruiseMissile
+TargetModel = Kh-101
 ModelConfidence = Low/Medium
 ```
 
 ---
 
-# 10. ThreatTrack
+# 10. TargetTrack
 
-`ThreatTrack` — логічний об'єкт, сформований із одного або декількох observations.
+`TargetTrack` — логічний об'єкт, сформований із одного або декількох targets.
 
 ```text
-Observation #141 ─┐
-Observation #146 ─┼── ThreatTrack #37
-Observation #151 ─┘
+Target #141 ─┐
+Target #146 ─┼── TargetTrack #37
+Target #151 ─┘
 ```
 
 Correlator враховує:
@@ -320,10 +320,10 @@ confidence
 Зв'язок:
 
 ```text
-ThreatTrackObservation
+TargetTrackTarget
 ----------------------
-ThreatTrackId
-ObservationId
+TargetTrackId
+TargetId
 Sequence
 AssociationConfidence
 ```
@@ -339,16 +339,16 @@ UAV
 Missile
 Aircraft
 GuidedBomb
-UnknownThreat
+UnknownTarget
 
 AirRaidAlert
 AlertCancelled
-ThreatCancelled
+TargetCancelled
 ExplosionReport
 AirDefenseActivity
 ```
 
-Підтипи ракет і БпЛА визначаються через `ThreatClass/ThreatModel`.
+Підтипи ракет і БпЛА визначаються через `TargetClass/TargetModel`.
 
 ---
 
@@ -395,13 +395,13 @@ old             last
 
 Відображаються:
 
-- попередні observations;
-- останній observation;
+- попередні targets;
+- останній target;
 - напрямок;
 - часові мітки;
 - широкий прогнозний коридор, якщо даних достатньо.
 
-Фактичні observations і прогноз повинні мати різне оформлення.
+Фактичні targets і прогноз повинні мати різне оформлення.
 
 ---
 
@@ -425,7 +425,7 @@ old             last
 Окремо оцінюються:
 
 ```text
-ObservationConfidence
+TargetConfidence
 ClassificationConfidence
 TrackConfidence
 DirectionConfidence
@@ -461,7 +461,7 @@ UI повинен відрізняти:
 
 # 17. ETA
 
-Для кожного активного `ThreatTrack`:
+Для кожного активного `TargetTrack`:
 
 ```text
 ETA до вас: ~12–20 хв
@@ -480,7 +480,7 @@ ETA невідомий
 остання зона
 час
 напрямок
-історія observations
+історія targets
 клас загрози
 доступна інформація про швидкість
 ```
@@ -577,7 +577,7 @@ Timeline:
 
 Дозволяє відтворити стан системи на будь-який момент часу.
 
-Зберігаються всі observations і зміни `ThreatTrack`.
+Зберігаються всі targets і зміни `TargetTrack`.
 
 ---
 
@@ -597,15 +597,15 @@ PostGIS
 Source
 RawMessage
 
-ThreatCategory
-ThreatClass
-ThreatModel
-ThreatModelAlias
+TargetCategory
+TargetClass
+TargetModel
+TargetModelAlias
 
-Observation
+Target
 
-ThreatTrack
-ThreatTrackObservation
+TargetTrack
+TargetTrackTarget
 
 AirAlert
 UserLocation
@@ -631,9 +631,9 @@ MultiPolygon
 Наприклад:
 
 ```text
-Observation.Location
-ThreatTrack.LastLocation
-ThreatTrack.TrackGeometry
+Target.Location
+TargetTrack.LastLocation
+TargetTrack.TrackGeometry
 Location.AreaGeometry
 ```
 
@@ -661,8 +661,8 @@ jsonb
 
 ```text
 RawMessage.RawPayload jsonb
-ThreatModel.Metadata jsonb
-Observation.ParserMetadata jsonb
+TargetModel.Metadata jsonb
+Target.ParserMetadata jsonb
 ```
 
 Структуровані дані, за якими виконуються основні joins/filtering, залишаються нормальними реляційними колонками.
@@ -676,9 +676,9 @@ Observation.ParserMetadata jsonb
 За значного зростання обсягу:
 
 ```text
-Observation
+Target
 RawMessage
-ThreatTrackHistory
+TargetTrackHistory
 ```
 
 можна партиціювати за часом.
@@ -706,9 +706,9 @@ Source
   ↓
 RawMessage
   ↓
-Observation
+Target
   ↓
-ThreatTrack
+TargetTrack
   ↓
 Classification
 ```
@@ -718,13 +718,13 @@ Classification
 ```text
 "покажи всі джерела цього track"
 
-"які observations сформували цю траєкторію"
+"які targets сформували цю траєкторію"
 
 "яка модель була визначена і чому"
 
 "переграй стан карти на 01:37"
 
-"знайди observations у цій зоні за останні 20 хв"
+"знайди targets у цій зоні за останні 20 хв"
 ```
 
 Для цього relational + spatial модель підходить краще.
@@ -800,7 +800,7 @@ Processing Service
 
 Correlation Service
     ├─ Deduplicator
-    └─ Threat Correlator
+    └─ Target Correlator
 
 Prediction Service
     ├─ ETA
@@ -855,11 +855,11 @@ RawMessage
       ↓
 Parser
       ↓
-Observation
+Target
       ↓
 Classification
       ↓
-ThreatTrack
+TargetTrack
       ↓
 PostgreSQL/PostGIS
       ↓
@@ -878,7 +878,7 @@ MVP реалізує:
 UAV
 ракети
 класифікація типу/моделі
-останні observations
+останні targets
 історія руху
 fading старих даних
 confidence
@@ -898,9 +898,9 @@ ETA
 ```text
 Map Object
      ↓
-ThreatTrack
+TargetTrack
      ↓
-Observation(s)
+Target(s)
      ↓
 RawMessage(s)
      ↓
@@ -912,11 +912,11 @@ Original Message
 А окремо для класифікації:
 
 ```text
-ThreatModel
+TargetModel
      ↓
 Classification Confidence
      ↓
-Observation
+Target
      ↓
 RawMessage
 ```

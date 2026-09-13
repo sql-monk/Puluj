@@ -16,7 +16,7 @@ namespace Puluj.Processing.Llm;
 
 /// <summary>
 /// Fallback parser (spec §4 "Parser / NLP", plan §3 p.3): the rule parser runs first; the model is asked only when
-/// rules found nothing in a message that still looks like a threat report. The model must answer in a fixed JSON
+/// rules found nothing in a message that still looks like a target report. The model must answer in a fixed JSON
 /// schema, may only use taxonomy codes it is given, and is told to leave fields null rather than guess (spec §9).
 /// </summary>
 public sealed class LlmParser : IParser
@@ -93,7 +93,7 @@ public sealed class LlmParser : IParser
     public async Task<IReadOnlyList<ParsedFact>> ParseAsync(NormalizedMessage message, ParseContext ctx, CancellationToken ct)
     {
         var facts = _rules.Parse(message, ctx);
-        if (facts.Count > 0 || Client is null || !LooksLikeThreatReport(message))
+        if (facts.Count > 0 || Client is null || !LooksLikeTargetReport(message))
         {
             return facts;
         }
@@ -132,7 +132,7 @@ public sealed class LlmParser : IParser
         return facts;
     }
 
-    private static bool LooksLikeThreatReport(NormalizedMessage message) =>
+    private static bool LooksLikeTargetReport(NormalizedMessage message) =>
         message.Segments.SelectMany(s => s.Tokens).Any(t => TriggerStems.Any(stem => t.Text.StartsWith(stem, StringComparison.Ordinal)));
 
     private async Task<LlmResponse> AskAsync(string text, CancellationToken ct)
@@ -173,16 +173,16 @@ public sealed class LlmParser : IParser
         foreach (var f in response.Facts ?? [])
         {
             var eventType = Enum.TryParse<EventType>(f.EventType, true, out var e) ? e : EventType.Unknown;
-            ThreatMention? threat = null;
-            if (f.Threat is { Code.Length: > 0 } t && Enum.TryParse<AliasTargetLevel>(t.Level, true, out var level))
+            TargetMention? target = null;
+            if (f.Target is { Code.Length: > 0 } t && Enum.TryParse<AliasTargetLevel>(t.Level, true, out var level))
             {
-                var threatRef = FindRef(taxonomy, level, t.Code);
-                if (threatRef is not null)
+                var targetRef = FindRef(taxonomy, level, t.Code);
+                if (targetRef is not null)
                 {
-                    threat = new ThreatMention(threatRef, t.Code, level == AliasTargetLevel.Model ? ConfidenceLevel.Medium : ConfidenceLevel.Low, f.Hedged, 0, 0);
+                    target = new TargetMention(targetRef, t.Code, level == AliasTargetLevel.Model ? ConfidenceLevel.Medium : ConfidenceLevel.Low, f.Hedged, 0, 0);
                 }
             }
-            if (threat is null && eventType is EventType.Unknown or EventType.ThreatObserved)
+            if (target is null && eventType is EventType.Unknown or EventType.TargetObserved)
             {
                 continue; // nothing verifiable
             }
@@ -207,8 +207,8 @@ public sealed class LlmParser : IParser
             {
                 SegmentIndex = segmentIndex,
                 SegmentText = f.Quote ?? (message.Segments.Count > 0 ? message.Segments[segmentIndex].Text : message.Text),
-                EventType = eventType == EventType.Unknown ? EventType.ThreatObserved : eventType,
-                Threat = threat,
+                EventType = eventType == EventType.Unknown ? EventType.TargetObserved : eventType,
+                Target = target,
                 Count = f.Count,
                 CountIsApproximate = f.CountApprox,
                 Places = places,
@@ -222,7 +222,7 @@ public sealed class LlmParser : IParser
         return facts;
     }
 
-    private static ThreatRef? FindRef(TaxonomyIndex taxonomy, AliasTargetLevel level, string code)
+    private static TargetRef? FindRef(TaxonomyIndex taxonomy, AliasTargetLevel level, string code)
     {
         // Codes are unique per level; scan the alias table's resolved refs by code.
         foreach (var alias in taxonomy.Aliases)
@@ -242,17 +242,17 @@ public sealed class LlmParser : IParser
         var taxonomy = _indexes.Taxonomy;
         var codes = taxonomy.Aliases
             .Select(a => taxonomy.Resolve(a.Level, a.TargetId))
-            .OfType<ThreatRef>()
+            .OfType<TargetRef>()
             .DistinctBy(r => (r.Level, r.Code))
             .OrderBy(r => r.Level).ThenBy(r => r.Code)
             .Select(r => $"{r.Level.ToString().ToLowerInvariant()}:{r.Code} ({r.Name})");
         var sb = new StringBuilder();
-        sb.AppendLine("You extract air-threat facts from Ukrainian/Russian OSINT messages (air force, regional administrations, monitoring channels) for a civil situational-awareness map.");
+        sb.AppendLine("You extract air-target facts from Ukrainian/Russian OSINT messages (air force, regional administrations, monitoring channels) for a civil situational-awareness map.");
         sb.AppendLine("Return only what the text states. Never infer a specific missile or drone model from context: use the most generic level the text supports. If the text says 'ймовірно', 'можливо' or uses '?', set hedged=true.");
-        sb.AppendLine("One fact per distinct threat statement. Place names must be copied as written in the text (nominative form is fine); roles: current (where it is now), origin (where it came from, 'з ...'), destination ('курсом на ...', 'у напрямку ...'), transit ('через ...').");
+        sb.AppendLine("One fact per distinct target statement. Place names must be copied as written in the text (nominative form is fine); roles: current (where it is now), origin (where it came from, 'з ...'), destination ('курсом на ...', 'у напрямку ...'), transit ('через ...').");
         sb.AppendLine("directionDeg is a compass heading in degrees only when the text names a direction (north=0, east=90, south=180, west=270). Leave count null unless a number or group word is present (група/декілька -> 3 with countApprox=true).");
-        sb.AppendLine("eventType: ThreatObserved for a threat report, AirRaidAlert, AlertCancelled, ThreatCancelled, ExplosionReport, AirDefenseActivity. Messages that are not about air threats yield an empty facts list.");
-        sb.AppendLine("Allowed threat codes (level:CODE):");
+        sb.AppendLine("eventType: TargetObserved for a target report, AirRaidAlert, AlertCancelled, TargetCancelled, ExplosionReport, AirDefenseActivity. Messages that are not about air targets yield an empty facts list.");
+        sb.AppendLine("Allowed target codes (level:CODE):");
         foreach (var c in codes)
         {
             sb.Append("- ").AppendLine(c);
@@ -268,8 +268,8 @@ public sealed class LlmParser : IParser
             additionalProperties = false,
             properties = new
             {
-                eventType = new { type = "string", @enum = new[] { "ThreatObserved", "AirRaidAlert", "AlertCancelled", "ThreatCancelled", "ExplosionReport", "AirDefenseActivity" } },
-                threat = new
+                eventType = new { type = "string", @enum = new[] { "TargetObserved", "AirRaidAlert", "AlertCancelled", "TargetCancelled", "ExplosionReport", "AirDefenseActivity" } },
+                target = new
                 {
                     type = new[] { "object", "null" },
                     additionalProperties = false,
@@ -303,7 +303,7 @@ public sealed class LlmParser : IParser
                 segment = new { type = new[] { "integer", "null" } },
                 quote = new { type = new[] { "string", "null" } },
             },
-            required = new[] { "eventType", "threat", "hedged", "count", "countApprox", "places", "directionDeg", "launch", "segment", "quote" },
+            required = new[] { "eventType", "target", "hedged", "count", "countApprox", "places", "directionDeg", "launch", "segment", "quote" },
         };
         return new Dictionary<string, JsonElement>
         {
@@ -317,7 +317,7 @@ public sealed class LlmParser : IParser
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private sealed record LlmResponse(List<LlmFact>? Facts);
-    private sealed record LlmFact(string? EventType, LlmThreat? Threat, bool Hedged, int? Count, bool CountApprox, List<LlmPlace>? Places, double? DirectionDeg, bool Launch, int? Segment, string? Quote);
-    private sealed record LlmThreat(string? Level, string? Code);
+    private sealed record LlmFact(string? EventType, LlmTarget? Target, bool Hedged, int? Count, bool CountApprox, List<LlmPlace>? Places, double? DirectionDeg, bool Launch, int? Segment, string? Quote);
+    private sealed record LlmTarget(string? Level, string? Code);
     private sealed record LlmPlace(string? Name, string? Role);
 }

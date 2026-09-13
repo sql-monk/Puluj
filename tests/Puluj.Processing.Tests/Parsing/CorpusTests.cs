@@ -44,18 +44,18 @@ public class CorpusTests(ITestOutputHelper output)
         {
             Assert.True(Enum.Parse<EventType>(e.Event) == f.EventType, $"event {e.Event} != {f.EventType}; {where}");
         }
-        if (e.Threat is not null)
+        if (e.Target is not null)
         {
-            Assert.True(f.Threat is not null, $"threat expected; {where}");
-            Assert.True(e.Threat == f.Threat!.Ref.Code, $"threat {e.Threat} != {f.Threat.Ref.Code}; {where}");
+            Assert.True(f.Target is not null, $"target expected; {where}");
+            Assert.True(e.Target == f.Target!.Ref.Code, $"target {e.Target} != {f.Target.Ref.Code}; {where}");
         }
         if (e.Level is not null)
         {
-            Assert.True(Enum.Parse<AliasTargetLevel>(e.Level) == f.Threat?.Ref.Level, $"level {e.Level} != {f.Threat?.Ref.Level}; {where}");
+            Assert.True(Enum.Parse<AliasTargetLevel>(e.Level) == f.Target?.Ref.Level, $"level {e.Level} != {f.Target?.Ref.Level}; {where}");
         }
         if (e.Hedged is bool h)
         {
-            Assert.True(h == (f.Threat?.Hedged ?? false), $"hedged {h}; {where}");
+            Assert.True(h == (f.Target?.Hedged ?? false), $"hedged {h}; {where}");
         }
         if (e.Count is int n)
         {
@@ -104,9 +104,9 @@ public class CorpusTests(ITestOutputHelper output)
         foreach (var f in facts)
         {
             sb.Append($"[{f.EventType}] ");
-            if (f.Threat is { } t)
+            if (f.Target is { } t)
             {
-                sb.Append($"threat={t.Ref.Code}/{t.Ref.Level}('{t.MatchedText}'{(t.Hedged ? ", hedged" : "")}) ");
+                sb.Append($"target={t.Ref.Code}/{t.Ref.Level}('{t.MatchedText}'{(t.Hedged ? ", hedged" : "")}) ");
             }
             if (f.Count is int n)
             {
@@ -132,6 +132,6 @@ public class CorpusTests(ITestOutputHelper output)
 
     private sealed record CorpusFile(List<Case> Cases);
     private sealed record Case(string Id, string Text, List<ExpectedFact> Facts);
-    private sealed record ExpectedFact(string? Event, string? Threat, string? Level, bool? Hedged, int? Count, bool? Approx, bool? Launch,
+    private sealed record ExpectedFact(string? Event, string? Target, string? Level, bool? Hedged, int? Count, bool? Approx, bool? Launch,
         bool? NoPlaces, string? Current, string? Origin, string? Destination, string? Transit, double? Direction, double? Quadrant);
 }

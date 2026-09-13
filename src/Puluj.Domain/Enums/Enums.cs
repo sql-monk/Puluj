@@ -16,7 +16,7 @@ public enum ProcessingStatus
     Skipped = 3,
 }
 
-/// <summary>How precise the location of an observation is. Never upgrade a vague text to a Point.</summary>
+/// <summary>How precise the location of an target is. Never upgrade a vague text to a Point.</summary>
 public enum LocationKind
 {
     Unknown = 0,
@@ -28,7 +28,7 @@ public enum LocationKind
     Point = 6,
 }
 
-/// <summary>Alert levels used by regional administrations (Kyiv oblast): yellow = threat (usually drones), red = missiles / imminent.
+/// <summary>Alert levels used by regional administrations (Kyiv oblast): yellow = target (usually drones), red = missiles / imminent.
 /// Structured feeds such as alerts.in.ua carry no level and stay Unknown.</summary>
 public enum AirAlertLevel
 {
@@ -63,15 +63,15 @@ public enum IdentificationMethod
     Manual = 3,
 }
 
-/// <summary>Spec §11 event types. Threat subtypes live in ThreatClass/ThreatModel, not here.</summary>
+/// <summary>Spec §11 event types. Target subtypes live in TargetClass/TargetModel, not here.</summary>
 public enum EventType
 {
     Unknown = 0,
-    /// <summary>A threat object is reported (moving, present, launched).</summary>
-    ThreatObserved = 1,
+    /// <summary>A target object is reported (moving, present, launched).</summary>
+    TargetObserved = 1,
     AirRaidAlert = 10,
     AlertCancelled = 11,
-    ThreatCancelled = 12,
+    TargetCancelled = 12,
     ExplosionReport = 20,
     AirDefenseActivity = 21,
 }
@@ -96,7 +96,7 @@ public enum PlaceLevel
     NamedArea = 7,
 }
 
-/// <summary>Which level of the threat hierarchy an alias resolves to.</summary>
+/// <summary>Which level of the target hierarchy an alias resolves to.</summary>
 public enum AliasTargetLevel
 {
     Category = 0,

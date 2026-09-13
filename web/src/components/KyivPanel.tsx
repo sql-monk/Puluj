@@ -19,7 +19,7 @@ const RECENT_MS = 60 * 60_000
 export default function KyivPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
   const regions = useStore((s) => s.regions)
   const alerts = useStore((s) => s.alerts)
-  const observations = useStore((s) => s.observations)
+  const targets = useStore((s) => s.targets)
   const filters = useStore((s) => s.filters)
   const setFilter = useStore((s) => s.setFilter)
   const selectedRegionId = useStore((s) => s.selectedRegionId)
@@ -34,7 +34,7 @@ export default function KyivPanel({ open, onClose }: { open: boolean; onClose: (
   const active = useMemo(() => Object.values(alerts).filter((a) => !a.endedAt), [alerts])
   const cityLevel = kyiv ? active.find((a) => a.placeId === kyiv.id)?.level : undefined
   const since = now.getTime() - RECENT_MS
-  const recent = (placeId: number) => observations.filter((o) => new Date(o.observedAt).getTime() >= since && (o.location?.placeId === placeId || o.destination?.placeId === placeId)).length
+  const recent = (placeId: number) => targets.filter((o) => new Date(o.observedAt).getTime() >= since && (o.location?.placeId === placeId || o.destination?.placeId === placeId)).length
 
   const rows = districts.map((d) => {
     const own = active.find((a) => a.placeId === d.id)?.level

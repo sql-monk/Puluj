@@ -1,22 +1,22 @@
 import { useMemo, useState } from 'react'
-import type { ObservationDto } from '../api/types'
+import type { TargetDto } from '../api/types'
 import { clock, confidenceLabel } from '../lib/format'
 import Highlight from './Highlight'
 import { sourceEnabled, usePalette, useStore } from '../store/useStore'
 
 const eventLabel: Record<string, string> = {
-  ThreatObserved: 'загроза',
+  TargetObserved: 'ціль',
   AirRaidAlert: 'тривога',
   AlertCancelled: 'відбій',
-  ThreatCancelled: 'загроза минула',
+  TargetCancelled: 'загроза минула',
   ExplosionReport: 'вибухи',
   AirDefenseActivity: 'ППО',
   Unknown: '',
 }
 
-/** Right-hand feed of all observations (newest first). With a region selected on the map, only its messages are listed. */
+/** Right-hand feed of all targets (newest first). With a region selected on the map, only its messages are listed. */
 export default function FeedPanel({ open, onToggle }: { open: boolean; onToggle: () => void }) {
-  const observations = useStore((s) => s.observations)
+  const targets = useStore((s) => s.targets)
   const regions = useStore((s) => s.regions)
   const selectedRegionId = useStore((s) => s.selectedRegionId)
   const selectRegion = useStore((s) => s.selectRegion)
@@ -34,15 +34,15 @@ export default function FeedPanel({ open, onToggle }: { open: boolean; onToggle:
   // In replay the feed only shows what had been reported by the cursor instant.
   const cutoff = mode === 'history' && at ? at.getTime() : null
   const list = useMemo(() => {
-    const bySource = observations.filter((o) => sourceEnabled(o.source.id, filters))
+    const bySource = targets.filter((o) => sourceEnabled(o.source.id, filters))
     const byTime = cutoff === null ? bySource : bySource.filter((o) => new Date(o.observedAt).getTime() <= cutoff)
     if (!selectedRegionId) return byTime
-    const hit = (o: ObservationDto) =>
+    const hit = (o: TargetDto) =>
       o.location?.regionId === selectedRegionId || o.location?.placeId === selectedRegionId || o.origin?.regionId === selectedRegionId || o.destination?.regionId === selectedRegionId
     // The selected target's own lines are never hidden by the region filter.
     return byTime.filter((o) => hit(o) || (selectedTrackId !== null && o.trackId === selectedTrackId))
-  }, [observations, selectedRegionId, cutoff, filters, selectedTrackId])
-  const fresh = (o: ObservationDto) => cutoff !== null && cutoff - new Date(o.observedAt).getTime() < 3 * 60_000
+  }, [targets, selectedRegionId, cutoff, filters, selectedTrackId])
+  const fresh = (o: TargetDto) => cutoff !== null && cutoff - new Date(o.observedAt).getTime() < 3 * 60_000
   // Alerts of the oblast itself plus levelled raion alerts inside it.
   const regionAlerts = selectedRegionId
     ? Object.values(alerts).filter((a) => !a.endedAt && (a.placeId === selectedRegionId || a.location?.regionId === selectedRegionId))
@@ -84,17 +84,17 @@ export default function FeedPanel({ open, onToggle }: { open: boolean; onToggle:
           </li>
         )}
         {list.map((o) => {
-          const color = o.threat ? (palette.marker[o.threat.displayMode] ?? palette.marker.uav) : o.eventType === 'AirRaidAlert' ? palette.alertRedLine : o.eventType === 'AlertCancelled' || o.eventType === 'ThreatCancelled' ? palette.home : '#64748b'
+          const color = o.type ? (palette.marker[o.type.displayMode] ?? palette.marker.uav) : o.eventType === 'AirRaidAlert' ? palette.alertRedLine : o.eventType === 'AlertCancelled' || o.eventType === 'TargetCancelled' ? palette.home : '#64748b'
           const mine = selectedTrackId !== null && o.trackId === selectedTrackId
           const withSelected = !mine && selectedTrackId !== null && selectedMessages.has(o.rawMessage.id)
           const isOpen = expanded === o.id
           const text = o.rawMessage.text ?? o.segmentText ?? ''
           return (
-            <li key={o.id} className={`border-b border-slate-100 px-3 py-2 dark:border-slate-800 ${o.duplicateOfObservationId ? 'opacity-70' : ''} ${fresh(o) ? 'bg-indigo-50 dark:bg-indigo-950/40' : ''} ${mine ? 'border-l-4 bg-amber-50 dark:bg-amber-900/30' : withSelected ? 'border-l-4 border-l-slate-300 dark:border-l-slate-600' : ''}`} style={mine ? { borderLeftColor: color } : undefined}>
+            <li key={o.id} className={`border-b border-slate-100 px-3 py-2 dark:border-slate-800 ${o.duplicateOfTargetId ? 'opacity-70' : ''} ${fresh(o) ? 'bg-indigo-50 dark:bg-indigo-950/40' : ''} ${mine ? 'border-l-4 bg-amber-50 dark:bg-amber-900/30' : withSelected ? 'border-l-4 border-l-slate-300 dark:border-l-slate-600' : ''}`} style={mine ? { borderLeftColor: color } : undefined}>
               <div className="flex items-baseline gap-2">
                 <span className="font-mono">{clock(o.observedAt)}</span>
                 <span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ background: color }} />
-                <span className="truncate font-medium">{o.threat?.label ?? eventLabel[o.eventType] ?? o.eventType}</span>
+                <span className="truncate font-medium">{o.type?.label ?? eventLabel[o.eventType] ?? o.eventType}</span>
                 <span className="ml-auto shrink-0 text-slate-400">{o.source.name}</span>
               </div>
               <div className="text-slate-500">
@@ -102,8 +102,8 @@ export default function FeedPanel({ open, onToggle }: { open: boolean; onToggle:
                 {o.destination && ` → ${o.destination.placeName}`}
                 {o.direction && ` · ${Math.round(o.direction.degrees)}°`}
                 {o.objectCount && ` · ${o.objectCountIsApproximate ? '~' : ''}${o.objectCount}`}
-                {o.threat && ` · ${confidenceLabel[o.modelConfidence]}`}
-                {o.duplicateOfObservationId && ' · дубль'}
+                {o.type && ` · ${confidenceLabel[o.modelConfidence]}`}
+                {o.duplicateOfTargetId && ' · дубль'}
               </div>
               <button className={`mt-0.5 block w-full text-left text-[12px] leading-snug text-slate-800 dark:text-slate-200 ${isOpen ? 'whitespace-pre-wrap' : 'truncate'}`} onClick={() => setExpanded(isOpen ? null : o.id)} title={isOpen ? 'Згорнути' : 'Розгорнути'}>
                 {mine && o.segmentText ? <Highlight text={text} part={o.segmentText} folded={!isOpen} /> : text || '(без тексту)'}

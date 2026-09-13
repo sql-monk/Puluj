@@ -5,9 +5,9 @@ using Puluj.Domain.Enums;
 namespace Puluj.Domain.Entities;
 
 /// <summary>Spec §6. A single fact extracted from one RawMessage.</summary>
-public class Observation
+public class Target
 {
-    public long ObservationId { get; set; }
+    public long TargetId { get; set; }
     public long RawMessageId { get; set; }
     public RawMessage? RawMessage { get; set; }
     public int SourceId { get; set; }
@@ -21,10 +21,10 @@ public class Observation
     public AirAlertLevel AlertLevel { get; set; }
 
     // Classification (spec §7–§9)
-    public int? ThreatCategoryId { get; set; }
-    public int? ThreatClassId { get; set; }
-    public int? ThreatFamilyId { get; set; }
-    public int? ThreatModelId { get; set; }
+    public int? TargetCategoryId { get; set; }
+    public int? TargetClassId { get; set; }
+    public int? TargetFamilyId { get; set; }
+    public int? TargetModelId { get; set; }
     public ConfidenceLevel ModelConfidence { get; set; }
     public ConfidenceLevel ClassificationConfidence { get; set; }
     public IdentificationMethod IdentificationMethod { get; set; }
@@ -49,10 +49,10 @@ public class Observation
     public double? DirectionDeg { get; set; }
     public ConfidenceLevel DirectionConfidence { get; set; }
 
-    public ConfidenceLevel ObservationConfidence { get; set; }
+    public ConfidenceLevel Confidence { get; set; }
 
-    /// <summary>Set when this observation repeats an earlier one (kept for provenance).</summary>
-    public long? DuplicateOfObservationId { get; set; }
+    /// <summary>Set when this target repeats an earlier one (kept for provenance).</summary>
+    public long? DuplicateOfTargetId { get; set; }
 
     public string ParserVersion { get; set; } = "";
     /// <summary>Matched rules, text spans, LLM prompt version — everything needed to explain the result.</summary>

@@ -44,7 +44,7 @@ public sealed class GazetteerIndex
     private static readonly HashSet<string> Friendly = ["UA", "MD", "XX"];
     private List<Geometry>? _hostile;
 
-    /// <summary>Polygons of the regions threats are launched from (everything imported that is not Ukraine, Moldova or a named area).</summary>
+    /// <summary>Polygons of the regions targets are launched from (everything imported that is not Ukraine, Moldova or a named area).</summary>
     private List<Geometry> Hostile => _hostile ??= _byId.Values
         .Where(p => p.Boundary is not null && p.Level == PlaceLevel.Region && !Friendly.Contains(p.CountryCode))
         .Select(p => p.Boundary!)

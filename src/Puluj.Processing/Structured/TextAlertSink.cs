@@ -9,21 +9,21 @@ using Puluj.Processing.Pipeline;
 namespace Puluj.Processing.Structured;
 
 /// <summary>
-/// Turns AirRaidAlert / AlertCancelled observations parsed from text ("Фастівський район — повітряна тривога, жовтий рівень")
+/// Turns AirRaidAlert / AlertCancelled targets parsed from text ("Фастівський район — повітряна тривога, жовтий рівень")
 /// into AirAlert intervals, so levelled regional alerts show on the map next to the alerts.in.ua ones.
 /// One open interval per (source, place); a repeated message only updates the level.
 /// </summary>
-public sealed class TextAlertSink(TimeProvider clock, ILogger<TextAlertSink> logger) : IObservationSink
+public sealed class TextAlertSink(TimeProvider clock, ILogger<TextAlertSink> logger) : ITargetSink
 {
     public const string KeyPrefix = "text:";
 
     /// <summary>Text alerts with no "відбій" are dropped after this long (see TrackWatchdog).</summary>
     public static readonly TimeSpan MaxAge = TimeSpan.FromHours(3);
 
-    public async Task OnObservationsAsync(PulujDbContext db, IReadOnlyList<Observation> observations, Source source, ICollection<PulujEvent> events, CancellationToken ct)
+    public async Task OnTargetsAsync(PulujDbContext db, IReadOnlyList<Target> targets, Source source, ICollection<PulujEvent> events, CancellationToken ct)
     {
         var now = clock.GetUtcNow();
-        foreach (var o in observations.OrderBy(x => x.ObservedAt))
+        foreach (var o in targets.OrderBy(x => x.ObservedAt))
         {
             if (o.IdentificationMethod == IdentificationMethod.Structured || o.LocationPlaceId is not int placeId)
             {

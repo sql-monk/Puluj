@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
-import type { ObservationDto, TrackDetailsDto } from '../api/types'
+import type { TargetDto, TrackDetailsDto } from '../api/types'
 import { useEta } from '../eta/useEta'
 import { clock, confidenceLabel, dateTime, directionText, etaText, fixChain, locationKindLabel } from '../lib/format'
 import { usePalette, useStore } from '../store/useStore'
@@ -11,18 +11,20 @@ interface Props {
 }
 
 const eventLabel: Record<string, string> = {
-  ThreatObserved: 'спостереження',
+  TargetObserved: 'спостереження',
   AirRaidAlert: 'тривога',
   AlertCancelled: 'відбій тривоги',
-  ThreatCancelled: 'загроза минула',
+  TargetCancelled: 'загроза минула',
   ExplosionReport: 'вибухи',
   AirDefenseActivity: 'робота ППО',
 }
 
+const linkLabel: Record<string, string> = { Continuation: 'продовження', Split: 'розділення', Merge: 'злиття', Possible: 'можливий зв’язок', Duplicate: 'дубль' }
+
 const methodLabel: Record<string, string> = { Rule: 'правила', Llm: 'LLM', Structured: 'структуроване джерело', Manual: 'вручну' }
 
 /**
- * Spec §18 / §31: the full provenance chain of the selected track — every observation, its source and the original
+ * Spec §18 / §31: the full provenance chain of the selected track — every target, its source and the original
  * message. A left-hand panel that stays open and follows the selection: pick another target on the map and it
  * shows that one. Only one target is selected at a time.
  */
@@ -34,9 +36,9 @@ export default function TrackDetailsDrawer({ onClose }: Props) {
   const [data, setData] = useState<TrackDetailsDto | null>(null)
   const [error, setError] = useState<string | null>(null)
   const eta = useEta(live ?? data?.track)
-  const version = live?.observationCount ?? 0
+  const version = live?.targetCount ?? 0
 
-  // Loaded for the selected track and refreshed when it gains observations (debounced; an older reply still lands).
+  // Loaded for the selected track and refreshed when it gains targets (debounced; an older reply still lands).
   const seq = useRef(0)
   const applied = useRef(0)
   useEffect(() => {
@@ -65,14 +67,14 @@ export default function TrackDetailsDrawer({ onClose }: Props) {
   }, [trackId, version])
 
   const track = live ?? data?.track
-  const observations = (data?.observations ?? []).filter((o) => sourceFilter === null || sourceFilter.includes(o.source.id)).slice().reverse()
+  const targets = (data?.targets ?? []).filter((o) => sourceFilter === null || sourceFilter.includes(o.source.id)).slice().reverse()
 
   return (
     <div className="pointer-events-auto absolute inset-y-0 left-0 top-12 z-30 flex w-full max-w-md flex-col bg-white shadow-2xl md:top-14 md:bottom-3 md:left-3 md:rounded-xl dark:bg-slate-900 dark:text-slate-100">
       <div className="flex items-center justify-between border-b border-slate-200 px-4 py-2.5 dark:border-slate-700">
         <div className="flex min-w-0 items-center gap-2 font-semibold">
-          {track && <span className="inline-block h-3 w-3 shrink-0 rounded-full" style={{ background: palette.marker[track.threat.displayMode] }} />}
-          <span className="truncate">{track ? `${track.threat.label} · трек #${track.id}` : 'Виділена ціль'}</span>
+          {track && <span className="inline-block h-3 w-3 shrink-0 rounded-full" style={{ background: palette.marker[track.type.displayMode] }} />}
+          <span className="truncate">{track ? `${track.type.label} · трек #${track.id}` : 'Виділена ціль'}</span>
         </div>
         <button className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200" onClick={onClose} aria-label="Закрити">
           ✕
@@ -84,15 +86,15 @@ export default function TrackDetailsDrawer({ onClose }: Props) {
         {trackId && !data && !error && <div className="text-slate-500">Завантаження…</div>}
         {track && (
           <section className="mb-4 rounded-lg bg-slate-50 p-3 text-xs dark:bg-slate-800">
-            <div>Тип: {track.threat.categoryName}{track.threat.className ? ` / ${track.threat.className}` : ''}</div>
-            <div>Модель: {track.threat.modelName ?? track.threat.familyName ?? '—'} · впевненість: {confidenceLabel[track.modelConfidence]}</div>
+            <div>Тип: {track.type.categoryName}{track.type.className ? ` / ${track.type.className}` : ''}</div>
+            <div>Модель: {track.type.modelName ?? track.type.familyName ?? '—'} · впевненість: {confidenceLabel[track.modelConfidence]}</div>
             <div>Останнє повідомлення: {clock(track.lastSeenAt)}</div>
             <div>
               Район: {track.lastLocation?.placeName ?? '—'} <span className="text-slate-400">({locationKindLabel[track.lastLocation?.kind ?? 'Unknown']})</span>
             </div>
             <div>Напрямок: {directionText(track.direction)}</div>
             {track.fixes.length >= 2 && <div>Був: {fixChain(track)}</div>}
-            <div>Впевненість треку: {confidenceLabel[track.trackConfidence]} · {track.observationCount} повід. · {Math.max(track.distinctSourceCount, track.sourceIds.length)} джерел</div>
+            <div>Впевненість треку: {confidenceLabel[track.trackConfidence]} · {track.targetCount} повід. · {Math.max(track.distinctSourceCount, track.sourceIds.length)} джерел</div>
             {track.objectCount && track.objectCount > 1 && <div>Цілей у групі: {track.objectCount}</div>}
             <div>ETA до вас: {etaText(eta)}</div>
             {track.status !== 'Active' && <div>Стан: {track.status === 'Cancelled' ? 'відбій' : 'закрито'}{track.closedReason ? ` (${track.closedReason})` : ''}</div>}
@@ -102,10 +104,10 @@ export default function TrackDetailsDrawer({ onClose }: Props) {
           <>
             <div className="mb-1 text-[11px] font-medium text-slate-500">Повідомлення, з яких побудовано трек (новіші зверху)</div>
             <ol className="space-y-3">
-              {observations.map((o) => (
-                <ObservationItem key={o.id} o={o} />
+              {targets.map((o) => (
+                <TargetItem key={o.id} o={o} />
               ))}
-              {observations.length === 0 && <li className="text-xs text-slate-500">Немає повідомлень від вибраних джерел.</li>}
+              {targets.length === 0 && <li className="text-xs text-slate-500">Немає повідомлень від вибраних джерел.</li>}
             </ol>
           </>
         )}
@@ -114,9 +116,9 @@ export default function TrackDetailsDrawer({ onClose }: Props) {
   )
 }
 
-function ObservationItem({ o }: { o: ObservationDto }) {
+function TargetItem({ o }: { o: TargetDto }) {
   return (
-    <li className={`rounded-lg border p-3 text-xs ${o.duplicateOfObservationId ? 'border-dashed border-slate-300 opacity-80 dark:border-slate-600' : 'border-slate-200 dark:border-slate-700'}`}>
+    <li className={`rounded-lg border p-3 text-xs ${o.duplicateOfTargetId ? 'border-dashed border-slate-300 opacity-80 dark:border-slate-600' : 'border-slate-200 dark:border-slate-700'}`}>
       <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-2">
         <span className="font-mono text-sm">{clock(o.observedAt)}</span>
         <span className="font-medium">{o.source.name}</span>
@@ -124,7 +126,7 @@ function ObservationItem({ o }: { o: ObservationDto }) {
       </div>
       <div className="mb-1 text-slate-600 dark:text-slate-300">
         {eventLabel[o.eventType] ?? o.eventType}
-        {o.threat && <> · {o.threat.label} ({confidenceLabel[o.modelConfidence]})</>}
+        {o.type && <> · {o.type.label} ({confidenceLabel[o.modelConfidence]})</>}
         {o.objectCount && <> · {o.objectCountIsApproximate ? '~' : ''}{o.objectCount} од.</>}
         {o.location?.placeName && <> · {o.location.placeName} <span className="text-slate-400">({locationKindLabel[o.location.kind]})</span></>}
         {o.destination && <> → {o.destination.placeName}</>}
@@ -132,10 +134,19 @@ function ObservationItem({ o }: { o: ObservationDto }) {
       </div>
       <div className="mb-1 text-[11px] text-slate-400">
         розпізнано: {methodLabel[o.identificationMethod] ?? o.identificationMethod}
-        {o.identificationSource && <> («{o.identificationSource}»)</>} · впевненість спостереження {confidenceLabel[o.observationConfidence]}
+        {o.identificationSource && <> («{o.identificationSource}»)</>} · впевненість спостереження {confidenceLabel[o.confidence]}
         {o.associationConfidence !== undefined && <> · зв'язок з треком {Math.round(o.associationConfidence * 100)}%</>}
-        {o.duplicateOfObservationId && <> · дубль #{o.duplicateOfObservationId}</>}
+        {o.duplicateOfTargetId && <> · дубль #{o.duplicateOfTargetId}</>}
       </div>
+      {o.links && o.links.length > 0 && (
+        <div className="mb-1 flex flex-wrap gap-1 text-[11px]">
+          {o.links.map((l) => (
+            <span key={`${l.direction}-${l.targetId}`} className="rounded bg-slate-100 px-1 text-slate-600 dark:bg-slate-800 dark:text-slate-300" title={`${linkLabel[l.kind] ?? l.kind}: ${Math.round(l.confidence * 100)}%`}>
+              {l.direction === 'from' ? '←' : '→'} #{l.targetId} {linkLabel[l.kind] ?? l.kind} {Math.round(l.confidence * 100)}%
+            </span>
+          ))}
+        </div>
+      )}
       <blockquote className="whitespace-pre-wrap rounded bg-slate-50 p-2 text-[12px] leading-snug text-slate-800 dark:bg-slate-800 dark:text-slate-200">
         {o.rawMessage.text ? <Highlight text={o.rawMessage.text} part={o.segmentText ?? ''} /> : (o.segmentText ?? '(без тексту)')}
       </blockquote>

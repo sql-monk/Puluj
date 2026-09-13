@@ -4,45 +4,45 @@ using Puluj.Domain.Enums;
 namespace Puluj.Domain.Entities;
 
 /// <summary>Spec §7. Top level: UAV, Missile, Aircraft, GuidedBomb, Unknown.</summary>
-public class ThreatCategory
+public class TargetCategory
 {
-    public int ThreatCategoryId { get; set; }
+    public int TargetCategoryId { get; set; }
     public required string Code { get; set; }
     public required string Name { get; set; }
-    public ICollection<ThreatClass> Classes { get; set; } = [];
+    public ICollection<TargetClass> Classes { get; set; } = [];
 }
 
 /// <summary>Spec §7. E.g. StrikeUAV, CruiseMissile, BallisticMissile.</summary>
-public class ThreatClass
+public class TargetClass
 {
-    public int ThreatClassId { get; set; }
-    public int ThreatCategoryId { get; set; }
-    public ThreatCategory? Category { get; set; }
+    public int TargetClassId { get; set; }
+    public int TargetCategoryId { get; set; }
+    public TargetCategory? Category { get; set; }
     public required string Code { get; set; }
     public required string Name { get; set; }
     /// <summary>Class-level defaults: speed range, ETA enabled, fade profile, correlation windows.</summary>
     public JsonDocument? Metadata { get; set; }
-    public ICollection<ThreatFamily> Families { get; set; } = [];
+    public ICollection<TargetFamily> Families { get; set; } = [];
 }
 
 /// <summary>Spec §7. E.g. ShahedFamily, Kh-101/555 family.</summary>
-public class ThreatFamily
+public class TargetFamily
 {
-    public int ThreatFamilyId { get; set; }
-    public int ThreatClassId { get; set; }
-    public ThreatClass? Class { get; set; }
+    public int TargetFamilyId { get; set; }
+    public int TargetClassId { get; set; }
+    public TargetClass? Class { get; set; }
     public required string Code { get; set; }
     public required string Name { get; set; }
     public JsonDocument? Metadata { get; set; }
-    public ICollection<ThreatModel> Models { get; set; } = [];
+    public ICollection<TargetModel> Models { get; set; } = [];
 }
 
 /// <summary>Spec §8. Concrete model (Shahed-136, Kh-101...).</summary>
-public class ThreatModel
+public class TargetModel
 {
-    public int ThreatModelId { get; set; }
-    public int ThreatFamilyId { get; set; }
-    public ThreatFamily? Family { get; set; }
+    public int TargetModelId { get; set; }
+    public int TargetFamilyId { get; set; }
+    public TargetFamily? Family { get; set; }
     public required string Code { get; set; }
     public required string CanonicalName { get; set; }
     public string? Manufacturer { get; set; }
@@ -52,9 +52,9 @@ public class ThreatModel
 }
 
 /// <summary>Spec §8. Text alias mapped to some level of the hierarchy.</summary>
-public class ThreatModelAlias
+public class TargetModelAlias
 {
-    public int ThreatModelAliasId { get; set; }
+    public int TargetModelAliasId { get; set; }
     public required string Alias { get; set; }
     /// <summary>ISO 639-1 (uk, ru, en) or "*".</summary>
     public string Language { get; set; } = "*";

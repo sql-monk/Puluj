@@ -40,7 +40,7 @@ public class SectionHeaderTests
         var parser = new RuleParser(new StaticIndexes());
         var normalized = new Normalizer().Normalize(Message);
         var facts = parser.Parse(normalized, new ParseContext(1, normalized.Language, null));
-        var sightings = facts.Where(f => f.EventType == EventType.ThreatObserved).ToList();
+        var sightings = facts.Where(f => f.EventType == EventType.TargetObserved).ToList();
         Assert.Equal(11, sightings.Count);
         // Headers are not sightings.
         Assert.DoesNotContain(sightings, f => f.SegmentText.Trim().EndsWith(':'));

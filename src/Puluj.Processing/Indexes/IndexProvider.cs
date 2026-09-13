@@ -49,33 +49,33 @@ public sealed class IndexProvider(IDbContextFactory<PulujDbContext> factory, ILo
 
     public static async Task<TaxonomyIndex> LoadTaxonomyAsync(PulujDbContext db, CancellationToken ct)
     {
-        var categories = await db.ThreatCategories.AsNoTracking().ToListAsync(ct);
-        var classes = await db.ThreatClasses.AsNoTracking().ToListAsync(ct);
-        var families = await db.ThreatFamilies.AsNoTracking().ToListAsync(ct);
-        var models = await db.ThreatModels.AsNoTracking().Where(m => m.Enabled).ToListAsync(ct);
-        var aliases = await db.ThreatModelAliases.AsNoTracking().ToListAsync(ct);
+        var categories = await db.TargetCategories.AsNoTracking().ToListAsync(ct);
+        var classes = await db.TargetClasses.AsNoTracking().ToListAsync(ct);
+        var families = await db.TargetFamilies.AsNoTracking().ToListAsync(ct);
+        var models = await db.TargetModels.AsNoTracking().Where(m => m.Enabled).ToListAsync(ct);
+        var aliases = await db.TargetModelAliases.AsNoTracking().ToListAsync(ct);
 
-        var classById = classes.ToDictionary(c => c.ThreatClassId);
-        var familyById = families.ToDictionary(f => f.ThreatFamilyId);
-        var refs = new Dictionary<(AliasTargetLevel, int), ThreatRef>();
+        var classById = classes.ToDictionary(c => c.TargetClassId);
+        var familyById = families.ToDictionary(f => f.TargetFamilyId);
+        var refs = new Dictionary<(AliasTargetLevel, int), TargetRef>();
         foreach (var c in categories)
         {
-            refs[(AliasTargetLevel.Category, c.ThreatCategoryId)] = new ThreatRef(c.ThreatCategoryId, null, null, null, c.Code, c.Name, AliasTargetLevel.Category);
+            refs[(AliasTargetLevel.Category, c.TargetCategoryId)] = new TargetRef(c.TargetCategoryId, null, null, null, c.Code, c.Name, AliasTargetLevel.Category);
         }
         foreach (var c in classes)
         {
-            refs[(AliasTargetLevel.Class, c.ThreatClassId)] = new ThreatRef(c.ThreatCategoryId, c.ThreatClassId, null, null, c.Code, c.Name, AliasTargetLevel.Class);
+            refs[(AliasTargetLevel.Class, c.TargetClassId)] = new TargetRef(c.TargetCategoryId, c.TargetClassId, null, null, c.Code, c.Name, AliasTargetLevel.Class);
         }
         foreach (var f in families)
         {
-            var c = classById[f.ThreatClassId];
-            refs[(AliasTargetLevel.Family, f.ThreatFamilyId)] = new ThreatRef(c.ThreatCategoryId, c.ThreatClassId, f.ThreatFamilyId, null, f.Code, f.Name, AliasTargetLevel.Family);
+            var c = classById[f.TargetClassId];
+            refs[(AliasTargetLevel.Family, f.TargetFamilyId)] = new TargetRef(c.TargetCategoryId, c.TargetClassId, f.TargetFamilyId, null, f.Code, f.Name, AliasTargetLevel.Family);
         }
         foreach (var m in models)
         {
-            var f = familyById[m.ThreatFamilyId];
-            var c = classById[f.ThreatClassId];
-            refs[(AliasTargetLevel.Model, m.ThreatModelId)] = new ThreatRef(c.ThreatCategoryId, c.ThreatClassId, f.ThreatFamilyId, m.ThreatModelId, m.Code, m.CanonicalName, AliasTargetLevel.Model);
+            var f = familyById[m.TargetFamilyId];
+            var c = classById[f.TargetClassId];
+            refs[(AliasTargetLevel.Model, m.TargetModelId)] = new TargetRef(c.TargetCategoryId, c.TargetClassId, f.TargetFamilyId, m.TargetModelId, m.Code, m.CanonicalName, AliasTargetLevel.Model);
         }
 
         var entries = aliases
@@ -86,10 +86,10 @@ public sealed class IndexProvider(IDbContextFactory<PulujDbContext> factory, ILo
             .ThenByDescending(a => a.Priority)
             .ToList();
 
-        var profiles = classes.ToDictionary(c => c.ThreatClassId, c => ClassProfile.FromMetadata(c.ThreatClassId, c.Code, c.Metadata));
+        var profiles = classes.ToDictionary(c => c.TargetClassId, c => ClassProfile.FromMetadata(c.TargetClassId, c.Code, c.Metadata));
         return new TaxonomyIndex(entries, refs, profiles,
-            categories.ToDictionary(c => c.Code, c => c.ThreatCategoryId),
-            classes.ToDictionary(c => c.Code, c => c.ThreatClassId));
+            categories.ToDictionary(c => c.Code, c => c.TargetCategoryId),
+            classes.ToDictionary(c => c.Code, c => c.TargetClassId));
     }
 
     public static async Task<GazetteerIndex> LoadGazetteerAsync(PulujDbContext db, CancellationToken ct)

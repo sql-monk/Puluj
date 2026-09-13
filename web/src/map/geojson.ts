@@ -9,7 +9,7 @@ import { displayModeEnabled, type Filters } from '../store/useStore'
 import { getPalette, type MapPalette } from './palette'
 
 /** Why a track is highlighted for the viewer's own point: it is close by, or it is heading this way. */
-export type ThreatKind = 'near' | 'towards' | ''
+export type HazardKind = 'near' | 'towards' | ''
 
 export interface TrackProps {
   id: number
@@ -30,7 +30,7 @@ export interface TrackProps {
   sources: number
   /** Objects in the group when the report counted more than one (badge), else 0. */
   count: number
-  threat: ThreatKind
+  hazard: HazardKind
   selected: boolean
   /** Reported in the same message as the selected target. */
   neighbor: boolean
@@ -84,7 +84,7 @@ export function ageMinutes(t: TrackDto, now: Date): number {
 
 export function visibleTracks(tracks: Record<number, TrackDto>, filters: Filters, now: Date): TrackDto[] {
   return Object.values(tracks).filter((t) => {
-    if (!displayModeEnabled(t.threat.displayMode, filters)) return false
+    if (!displayModeEnabled(t.type.displayMode, filters)) return false
     if (filters.activeOnly && t.status !== 'Active') return false
     if (filters.sources !== null && !t.sourceIds.some((id) => filters.sources!.includes(id))) return false
     // A target lives on the map for the viewer's chosen time after its last message, whatever its status.
@@ -97,7 +97,7 @@ export function visibleTracks(tracks: Record<number, TrackDto>, filters: Filters
  * "Near" for a region-level report means the point lies inside that region (its polygon, when known): the region's
  * covering radius would otherwise call a whole neighbouring oblast "near".
  */
-export function threatKind(t: TrackDto, home: Home, now: Date, regionsById?: Map<number, RegionDto>): ThreatKind {
+export function hazardKind(t: TrackDto, home: Home, now: Date, regionsById?: Map<number, RegionDto>): HazardKind {
   const loc = t.lastLocation
   if (!loc?.point || t.status !== 'Active') return ''
   const km = distance(point(loc.point.coordinates), point([home.lon, home.lat]), { units: 'kilometers' })
@@ -120,7 +120,7 @@ export function buildTrackLayers(tracks: TrackDto[], now: Date, regionsById: Map
   const fixes: Feature<Point | LineString, FixProps>[] = []
   const forecasts: Feature<LineString | Point | Polygon, TrackProps>[] = []
   const areas: Feature<Polygon | MultiPolygon, TrackProps>[] = []
-  const home = filters.threats ? (opts.home ?? null) : null
+  const home = filters.highlightTargets ? (opts.home ?? null) : null
   const palette = opts.palette ?? getPalette('light')
   // Targets listed in the same message as the selected one light up with it.
   const selectedTrack = opts.selectedId == null ? undefined : tracks.find((t) => t.id === opts.selectedId)
@@ -132,10 +132,10 @@ export function buildTrackLayers(tracks: TrackDto[], now: Date, regionsById: Map
     const selected = opts.selectedId === t.id
     const props: TrackProps = {
       id: t.id,
-      label: t.threat.label,
-      mode: t.threat.displayMode,
-      color: palette.marker[t.threat.displayMode] ?? palette.marker.uav,
-      vector: palette.vector[t.threat.displayMode] ?? palette.vector.uav,
+      label: t.type.label,
+      mode: t.type.displayMode,
+      color: palette.marker[t.type.displayMode] ?? palette.marker.uav,
+      vector: palette.vector[t.type.displayMode] ?? palette.vector.uav,
       opacity,
       rotation: t.direction?.degrees ?? 0,
       hasDirection: !!t.direction,
@@ -145,7 +145,7 @@ export function buildTrackLayers(tracks: TrackDto[], now: Date, regionsById: Map
       ageMin: Math.round((now.getTime() - new Date(t.lastSeenAt).getTime()) / 60000),
       sources: Math.max(t.distinctSourceCount, t.sourceIds.length),
       count: t.objectCount && t.objectCount > 1 ? t.objectCount : 0,
-      threat: home ? threatKind(t, home, now, regionsById) : '',
+      hazard: home ? hazardKind(t, home, now, regionsById) : '',
       selected,
       neighbor: !selected && selectedMessages.size > 0 && t.messageIds.some((m) => selectedMessages.has(m)),
     }
@@ -163,8 +163,8 @@ export function buildTrackLayers(tracks: TrackDto[], now: Date, regionsById: Map
 
       // Forecast: reported course projected a few minutes ahead at the class speed. Dashed centreline (clearly "forecast")
       // inside a hatched cone whose width says how sure the course is; chevron at the end for the heading.
-      if (filters.forecast && t.direction && t.threat.displayMode !== 'ballistic' && t.status === 'Active') {
-        const speed = t.threat.speedProfile.maxKmh
+      if (filters.forecast && t.direction && t.type.displayMode !== 'ballistic' && t.status === 'Active') {
+        const speed = t.type.speedProfile.maxKmh
         const km = speed ? Math.max(MIN_FORECAST_KM, (speed * FORECAST_MINUTES) / 60) : DEFAULT_FORECAST_KM
         const origin = loc.point.coordinates
         const end = destination(point(origin), km, t.direction.degrees, { units: 'kilometers' })

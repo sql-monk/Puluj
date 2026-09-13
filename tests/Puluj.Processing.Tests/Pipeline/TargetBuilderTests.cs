@@ -8,11 +8,11 @@ using Puluj.Processing.Text;
 namespace Puluj.Processing.Tests.Pipeline;
 
 /// <summary>The bearing drawn on the map must follow the reported route, never the centre of an area that already contains the target.</summary>
-public class ObservationBuilderTests
+public class TargetBuilderTests
 {
-    private static Observation BuildFirst(string text) => BuildAll(text)[0];
+    private static Target BuildFirst(string text) => BuildAll(text)[0];
 
-    private static List<Observation> BuildAll(string text)
+    private static List<Target> BuildAll(string text)
     {
         var indexes = new StaticIndexes();
         var normalized = new Normalizer().Normalize(text);
@@ -20,7 +20,7 @@ public class ObservationBuilderTests
         Assert.NotEmpty(facts);
         var raw = new RawMessage { SourceId = 1, SourceMessageId = "t", PublishedAt = DateTimeOffset.UtcNow, ReceivedAt = DateTimeOffset.UtcNow, RawText = text, Hash = "h" };
         var source = new Source { SourceId = 1, Code = "test", Name = "test", Type = SourceType.Telegram, TrustLevel = 0.9 };
-        var builder = new ObservationBuilder(indexes);
+        var builder = new TargetBuilder(indexes);
         return facts.Select(f => builder.Build(f, raw, source, "test", IdentificationMethod.Rule, normalized.Language)).ToList();
     }
 
@@ -34,7 +34,7 @@ public class ObservationBuilderTests
         Assert.Equal(LocationKind.District, o.LocationKind);
         Assert.True(o.LocationAccuracyKm >= 25, $"accuracy {o.LocationAccuracyKm}");
         // The named cause must not become a separate "drone seen" fact.
-        Assert.DoesNotContain(all, x => x.EventType == EventType.ThreatObserved);
+        Assert.DoesNotContain(all, x => x.EventType == EventType.TargetObserved);
     }
 
     [Fact]

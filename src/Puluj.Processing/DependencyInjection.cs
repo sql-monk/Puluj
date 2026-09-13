@@ -25,14 +25,14 @@ public static class DependencyInjection
         services.Configure<LlmOptions>(configuration.GetSection(LlmOptions.Section));
         services.AddSingleton<RuleParser>();
         services.AddSingleton<IParser, LlmParser>(); // rules first, model only as a fallback
-        services.AddSingleton<ObservationBuilder>();
+        services.AddSingleton<TargetBuilder>();
         services.AddSingleton<AlertsInUaHandler>();
         services.AddSingleton<RawMessageProcessor>();
         services.AddHostedService<ProcessingLoop>();
 
         services.Configure<CorrelationOptions>(configuration.GetSection(CorrelationOptions.Section));
-        services.AddSingleton<IObservationSink, Structured.TextAlertSink>(); // before correlation: it needs the intervals in place
-        services.AddSingleton<IObservationSink, CorrelationSink>();
+        services.AddSingleton<ITargetSink, Structured.TextAlertSink>(); // before correlation: it needs the intervals in place
+        services.AddSingleton<ITargetSink, CorrelationSink>();
         services.AddHostedService<TrackWatchdog>();
         return services;
     }

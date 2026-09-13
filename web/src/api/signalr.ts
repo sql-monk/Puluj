@@ -1,11 +1,11 @@
 import { HubConnectionBuilder, HubConnectionState, LogLevel, type HubConnection } from '@microsoft/signalr'
-import type { AlertDto, ObservationDto, TrackDto } from './types'
+import type { AlertDto, TargetDto, TrackDto } from './types'
 
 export interface MapEvents {
   trackUpserted: (t: TrackDto) => void
   trackClosed: (t: TrackDto) => void
   alertChanged: (a: AlertDto) => void
-  observationCreated: (o: ObservationDto) => void
+  targetCreated: (o: TargetDto) => void
   connectionChanged: (state: 'connected' | 'reconnecting' | 'disconnected') => void
 }
 
@@ -20,7 +20,7 @@ export function connectMapHub(events: MapEvents): HubConnection {
   connection.on('TrackUpserted', events.trackUpserted)
   connection.on('TrackClosed', events.trackClosed)
   connection.on('AlertChanged', events.alertChanged)
-  connection.on('ObservationCreated', events.observationCreated)
+  connection.on('TargetCreated', events.targetCreated)
   connection.onreconnecting(() => events.connectionChanged('reconnecting'))
   connection.onreconnected(() => events.connectionChanged('connected'))
   connection.onclose(() => events.connectionChanged('disconnected'))

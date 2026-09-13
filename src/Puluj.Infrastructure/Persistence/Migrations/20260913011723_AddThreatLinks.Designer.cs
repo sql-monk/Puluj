@@ -3,6 +3,7 @@ using System;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NetTopologySuite.Geometries;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -13,9 +14,11 @@ using Puluj.Infrastructure.Persistence;
 namespace Puluj.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(PulujDbContext))]
-    partial class PulujDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260913011723_AddThreatLinks")]
+    partial class AddThreatLinks
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -458,14 +461,14 @@ namespace Puluj.Infrastructure.Persistence.Migrations
                     b.ToTable("sources", (string)null);
                 });
 
-            modelBuilder.Entity("Puluj.Domain.Entities.Target", b =>
+            modelBuilder.Entity("Puluj.Domain.Entities.Threat", b =>
                 {
-                    b.Property<long>("TargetId")
+                    b.Property<long>("ThreatId")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("bigint")
-                        .HasColumnName("target_id");
+                        .HasColumnName("threat_id");
 
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("TargetId"));
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("ThreatId"));
 
                     b.Property<int>("AlertLevel")
                         .HasColumnType("integer")
@@ -495,9 +498,9 @@ namespace Puluj.Infrastructure.Persistence.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("direction_kind");
 
-                    b.Property<long?>("DuplicateOfTargetId")
+                    b.Property<long?>("DuplicateOfThreatId")
                         .HasColumnType("bigint")
-                        .HasColumnName("duplicate_of_target_id");
+                        .HasColumnName("duplicate_of_threat_id");
 
                     b.Property<int>("EventType")
                         .HasColumnType("integer")
@@ -574,76 +577,76 @@ namespace Puluj.Infrastructure.Persistence.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("source_id");
 
-                    b.Property<int?>("TargetCategoryId")
+                    b.Property<int?>("ThreatCategoryId")
                         .HasColumnType("integer")
-                        .HasColumnName("target_category_id");
+                        .HasColumnName("threat_category_id");
 
-                    b.Property<int?>("TargetClassId")
+                    b.Property<int?>("ThreatClassId")
                         .HasColumnType("integer")
-                        .HasColumnName("target_class_id");
+                        .HasColumnName("threat_class_id");
 
-                    b.Property<int?>("TargetFamilyId")
+                    b.Property<int?>("ThreatFamilyId")
                         .HasColumnType("integer")
-                        .HasColumnName("target_family_id");
+                        .HasColumnName("threat_family_id");
 
-                    b.Property<int?>("TargetModelId")
+                    b.Property<int?>("ThreatModelId")
                         .HasColumnType("integer")
-                        .HasColumnName("target_model_id");
+                        .HasColumnName("threat_model_id");
 
-                    b.HasKey("TargetId")
-                        .HasName("pk_targets");
+                    b.HasKey("ThreatId")
+                        .HasName("pk_threats");
 
                     b.HasIndex("DestinationPlaceId")
-                        .HasDatabaseName("ix_targets_destination_place_id");
+                        .HasDatabaseName("ix_threats_destination_place_id");
 
-                    b.HasIndex("DuplicateOfTargetId")
-                        .HasDatabaseName("ix_targets_duplicate_of_target_id");
+                    b.HasIndex("DuplicateOfThreatId")
+                        .HasDatabaseName("ix_threats_duplicate_of_threat_id");
 
                     b.HasIndex("Location")
-                        .HasDatabaseName("ix_targets_location");
+                        .HasDatabaseName("ix_threats_location");
 
                     NpgsqlIndexBuilderExtensions.HasMethod(b.HasIndex("Location"), "gist");
 
                     b.HasIndex("LocationPlaceId")
-                        .HasDatabaseName("ix_targets_location_place_id");
+                        .HasDatabaseName("ix_threats_location_place_id");
 
                     b.HasIndex("ObservedAt")
-                        .HasDatabaseName("ix_targets_observed_at");
+                        .HasDatabaseName("ix_threats_observed_at");
 
                     NpgsqlIndexBuilderExtensions.HasMethod(b.HasIndex("ObservedAt"), "brin");
 
                     b.HasIndex("OriginPlaceId")
-                        .HasDatabaseName("ix_targets_origin_place_id");
+                        .HasDatabaseName("ix_threats_origin_place_id");
 
                     b.HasIndex("RawMessageId")
-                        .HasDatabaseName("ix_targets_raw_message_id");
+                        .HasDatabaseName("ix_threats_raw_message_id");
 
                     b.HasIndex("SourceId")
-                        .HasDatabaseName("ix_targets_source_id");
+                        .HasDatabaseName("ix_threats_source_id");
 
-                    b.HasIndex("TargetCategoryId")
-                        .HasDatabaseName("ix_targets_target_category_id");
+                    b.HasIndex("ThreatCategoryId")
+                        .HasDatabaseName("ix_threats_threat_category_id");
 
-                    b.HasIndex("TargetFamilyId")
-                        .HasDatabaseName("ix_targets_target_family_id");
+                    b.HasIndex("ThreatFamilyId")
+                        .HasDatabaseName("ix_threats_threat_family_id");
 
-                    b.HasIndex("TargetModelId")
-                        .HasDatabaseName("ix_targets_target_model_id");
+                    b.HasIndex("ThreatModelId")
+                        .HasDatabaseName("ix_threats_threat_model_id");
 
-                    b.HasIndex("TargetClassId", "ObservedAt")
-                        .HasDatabaseName("ix_targets_target_class_id_observed_at");
+                    b.HasIndex("ThreatClassId", "ObservedAt")
+                        .HasDatabaseName("ix_threats_threat_class_id_observed_at");
 
-                    b.ToTable("targets", (string)null);
+                    b.ToTable("threats", (string)null);
                 });
 
-            modelBuilder.Entity("Puluj.Domain.Entities.TargetCategory", b =>
+            modelBuilder.Entity("Puluj.Domain.Entities.ThreatCategory", b =>
                 {
-                    b.Property<int>("TargetCategoryId")
+                    b.Property<int>("ThreatCategoryId")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("integer")
-                        .HasColumnName("target_category_id");
+                        .HasColumnName("threat_category_id");
 
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("TargetCategoryId"));
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("ThreatCategoryId"));
 
                     b.Property<string>("Code")
                         .IsRequired()
@@ -657,66 +660,24 @@ namespace Puluj.Infrastructure.Persistence.Migrations
                         .HasColumnType("character varying(128)")
                         .HasColumnName("name");
 
-                    b.HasKey("TargetCategoryId")
-                        .HasName("pk_target_categories");
+                    b.HasKey("ThreatCategoryId")
+                        .HasName("pk_threat_categories");
 
                     b.HasIndex("Code")
                         .IsUnique()
-                        .HasDatabaseName("ix_target_categories_code");
+                        .HasDatabaseName("ix_threat_categories_code");
 
-                    b.ToTable("target_categories", (string)null);
+                    b.ToTable("threat_categories", (string)null);
                 });
 
-            modelBuilder.Entity("Puluj.Domain.Entities.TargetClass", b =>
+            modelBuilder.Entity("Puluj.Domain.Entities.ThreatClass", b =>
                 {
-                    b.Property<int>("TargetClassId")
+                    b.Property<int>("ThreatClassId")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("integer")
-                        .HasColumnName("target_class_id");
+                        .HasColumnName("threat_class_id");
 
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("TargetClassId"));
-
-                    b.Property<string>("Code")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
-                        .HasColumnName("code");
-
-                    b.Property<JsonDocument>("Metadata")
-                        .HasColumnType("jsonb")
-                        .HasColumnName("metadata");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)")
-                        .HasColumnName("name");
-
-                    b.Property<int>("TargetCategoryId")
-                        .HasColumnType("integer")
-                        .HasColumnName("target_category_id");
-
-                    b.HasKey("TargetClassId")
-                        .HasName("pk_target_classes");
-
-                    b.HasIndex("Code")
-                        .IsUnique()
-                        .HasDatabaseName("ix_target_classes_code");
-
-                    b.HasIndex("TargetCategoryId")
-                        .HasDatabaseName("ix_target_classes_target_category_id");
-
-                    b.ToTable("target_classes", (string)null);
-                });
-
-            modelBuilder.Entity("Puluj.Domain.Entities.TargetFamily", b =>
-                {
-                    b.Property<int>("TargetFamilyId")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer")
-                        .HasColumnName("target_family_id");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("TargetFamilyId"));
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("ThreatClassId"));
 
                     b.Property<string>("Code")
                         .IsRequired()
@@ -734,32 +695,74 @@ namespace Puluj.Infrastructure.Persistence.Migrations
                         .HasColumnType("character varying(128)")
                         .HasColumnName("name");
 
-                    b.Property<int>("TargetClassId")
+                    b.Property<int>("ThreatCategoryId")
                         .HasColumnType("integer")
-                        .HasColumnName("target_class_id");
+                        .HasColumnName("threat_category_id");
 
-                    b.HasKey("TargetFamilyId")
-                        .HasName("pk_target_families");
+                    b.HasKey("ThreatClassId")
+                        .HasName("pk_threat_classes");
 
                     b.HasIndex("Code")
                         .IsUnique()
-                        .HasDatabaseName("ix_target_families_code");
+                        .HasDatabaseName("ix_threat_classes_code");
 
-                    b.HasIndex("TargetClassId")
-                        .HasDatabaseName("ix_target_families_target_class_id");
+                    b.HasIndex("ThreatCategoryId")
+                        .HasDatabaseName("ix_threat_classes_threat_category_id");
 
-                    b.ToTable("target_families", (string)null);
+                    b.ToTable("threat_classes", (string)null);
                 });
 
-            modelBuilder.Entity("Puluj.Domain.Entities.TargetLink", b =>
+            modelBuilder.Entity("Puluj.Domain.Entities.ThreatFamily", b =>
                 {
-                    b.Property<long>("FromTargetId")
-                        .HasColumnType("bigint")
-                        .HasColumnName("from_target_id");
+                    b.Property<int>("ThreatFamilyId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasColumnName("threat_family_id");
 
-                    b.Property<long>("ToTargetId")
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("ThreatFamilyId"));
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("code");
+
+                    b.Property<JsonDocument>("Metadata")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("metadata");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("name");
+
+                    b.Property<int>("ThreatClassId")
+                        .HasColumnType("integer")
+                        .HasColumnName("threat_class_id");
+
+                    b.HasKey("ThreatFamilyId")
+                        .HasName("pk_threat_families");
+
+                    b.HasIndex("Code")
+                        .IsUnique()
+                        .HasDatabaseName("ix_threat_families_code");
+
+                    b.HasIndex("ThreatClassId")
+                        .HasDatabaseName("ix_threat_families_threat_class_id");
+
+                    b.ToTable("threat_families", (string)null);
+                });
+
+            modelBuilder.Entity("Puluj.Domain.Entities.ThreatLink", b =>
+                {
+                    b.Property<long>("FromThreatId")
                         .HasColumnType("bigint")
-                        .HasColumnName("to_target_id");
+                        .HasColumnName("from_threat_id");
+
+                    b.Property<long>("ToThreatId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("to_threat_id");
 
                     b.Property<double>("Confidence")
                         .HasColumnType("double precision")
@@ -773,26 +776,26 @@ namespace Puluj.Infrastructure.Persistence.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("kind");
 
-                    b.HasKey("FromTargetId", "ToTargetId")
-                        .HasName("pk_target_links");
+                    b.HasKey("FromThreatId", "ToThreatId")
+                        .HasName("pk_threat_links");
 
                     b.HasIndex("CreatedAt")
-                        .HasDatabaseName("ix_target_links_created_at");
+                        .HasDatabaseName("ix_threat_links_created_at");
 
-                    b.HasIndex("ToTargetId")
-                        .HasDatabaseName("ix_target_links_to_target_id");
+                    b.HasIndex("ToThreatId")
+                        .HasDatabaseName("ix_threat_links_to_threat_id");
 
-                    b.ToTable("target_links", (string)null);
+                    b.ToTable("threat_links", (string)null);
                 });
 
-            modelBuilder.Entity("Puluj.Domain.Entities.TargetModel", b =>
+            modelBuilder.Entity("Puluj.Domain.Entities.ThreatModel", b =>
                 {
-                    b.Property<int>("TargetModelId")
+                    b.Property<int>("ThreatModelId")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("integer")
-                        .HasColumnName("target_model_id");
+                        .HasColumnName("threat_model_id");
 
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("TargetModelId"));
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("ThreatModelId"));
 
                     b.Property<string>("CanonicalName")
                         .IsRequired()
@@ -824,31 +827,31 @@ namespace Puluj.Infrastructure.Persistence.Migrations
                         .HasColumnType("jsonb")
                         .HasColumnName("metadata");
 
-                    b.Property<int>("TargetFamilyId")
+                    b.Property<int>("ThreatFamilyId")
                         .HasColumnType("integer")
-                        .HasColumnName("target_family_id");
+                        .HasColumnName("threat_family_id");
 
-                    b.HasKey("TargetModelId")
-                        .HasName("pk_target_models");
+                    b.HasKey("ThreatModelId")
+                        .HasName("pk_threat_models");
 
                     b.HasIndex("Code")
                         .IsUnique()
-                        .HasDatabaseName("ix_target_models_code");
+                        .HasDatabaseName("ix_threat_models_code");
 
-                    b.HasIndex("TargetFamilyId")
-                        .HasDatabaseName("ix_target_models_target_family_id");
+                    b.HasIndex("ThreatFamilyId")
+                        .HasDatabaseName("ix_threat_models_threat_family_id");
 
-                    b.ToTable("target_models", (string)null);
+                    b.ToTable("threat_models", (string)null);
                 });
 
-            modelBuilder.Entity("Puluj.Domain.Entities.TargetModelAlias", b =>
+            modelBuilder.Entity("Puluj.Domain.Entities.ThreatModelAlias", b =>
                 {
-                    b.Property<int>("TargetModelAliasId")
+                    b.Property<int>("ThreatModelAliasId")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("integer")
-                        .HasColumnName("target_model_alias_id");
+                        .HasColumnName("threat_model_alias_id");
 
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("TargetModelAliasId"));
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("ThreatModelAliasId"));
 
                     b.Property<string>("Alias")
                         .IsRequired()
@@ -886,24 +889,24 @@ namespace Puluj.Infrastructure.Persistence.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("target_level");
 
-                    b.HasKey("TargetModelAliasId")
-                        .HasName("pk_target_model_aliases");
+                    b.HasKey("ThreatModelAliasId")
+                        .HasName("pk_threat_model_aliases");
 
                     b.HasIndex("Alias", "Language", "TargetLevel", "TargetId")
                         .IsUnique()
-                        .HasDatabaseName("ix_target_model_aliases_alias_language_target_level_target_id");
+                        .HasDatabaseName("ix_threat_model_aliases_alias_language_target_level_target_id");
 
-                    b.ToTable("target_model_aliases", (string)null);
+                    b.ToTable("threat_model_aliases", (string)null);
                 });
 
-            modelBuilder.Entity("Puluj.Domain.Entities.TargetTrack", b =>
+            modelBuilder.Entity("Puluj.Domain.Entities.ThreatTrack", b =>
                 {
-                    b.Property<long>("TargetTrackId")
+                    b.Property<long>("ThreatTrackId")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("bigint")
-                        .HasColumnName("target_track_id");
+                        .HasColumnName("threat_track_id");
 
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("TargetTrackId"));
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("ThreatTrackId"));
 
                     b.Property<string>("ClosedReason")
                         .HasMaxLength(256)
@@ -954,9 +957,9 @@ namespace Puluj.Infrastructure.Persistence.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("last_source_id");
 
-                    b.Property<long?>("LastTargetId")
+                    b.Property<long?>("LastThreatId")
                         .HasColumnType("bigint")
-                        .HasColumnName("last_target_id");
+                        .HasColumnName("last_threat_id");
 
                     b.Property<int>("ModelConfidence")
                         .HasColumnType("integer")
@@ -970,25 +973,25 @@ namespace Puluj.Infrastructure.Persistence.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("status");
 
-                    b.Property<int>("TargetCategoryId")
+                    b.Property<int>("ThreatCategoryId")
                         .HasColumnType("integer")
-                        .HasColumnName("target_category_id");
+                        .HasColumnName("threat_category_id");
 
-                    b.Property<int?>("TargetClassId")
+                    b.Property<int?>("ThreatClassId")
                         .HasColumnType("integer")
-                        .HasColumnName("target_class_id");
+                        .HasColumnName("threat_class_id");
 
-                    b.Property<int>("TargetCount")
+                    b.Property<int>("ThreatCount")
                         .HasColumnType("integer")
-                        .HasColumnName("target_count");
+                        .HasColumnName("threat_count");
 
-                    b.Property<int?>("TargetFamilyId")
+                    b.Property<int?>("ThreatFamilyId")
                         .HasColumnType("integer")
-                        .HasColumnName("target_family_id");
+                        .HasColumnName("threat_family_id");
 
-                    b.Property<int?>("TargetModelId")
+                    b.Property<int?>("ThreatModelId")
                         .HasColumnType("integer")
-                        .HasColumnName("target_model_id");
+                        .HasColumnName("threat_model_id");
 
                     b.Property<int>("TrackConfidence")
                         .HasColumnType("integer")
@@ -1002,43 +1005,43 @@ namespace Puluj.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");
 
-                    b.HasKey("TargetTrackId")
-                        .HasName("pk_target_tracks");
+                    b.HasKey("ThreatTrackId")
+                        .HasName("pk_threat_tracks");
 
                     b.HasIndex("LastLocation")
-                        .HasDatabaseName("ix_target_tracks_last_location");
+                        .HasDatabaseName("ix_threat_tracks_last_location");
 
                     NpgsqlIndexBuilderExtensions.HasMethod(b.HasIndex("LastLocation"), "gist");
 
                     b.HasIndex("LastLocationPlaceId")
-                        .HasDatabaseName("ix_target_tracks_last_location_place_id");
+                        .HasDatabaseName("ix_threat_tracks_last_location_place_id");
 
-                    b.HasIndex("TargetCategoryId")
-                        .HasDatabaseName("ix_target_tracks_target_category_id");
+                    b.HasIndex("ThreatCategoryId")
+                        .HasDatabaseName("ix_threat_tracks_threat_category_id");
 
-                    b.HasIndex("TargetFamilyId")
-                        .HasDatabaseName("ix_target_tracks_target_family_id");
+                    b.HasIndex("ThreatFamilyId")
+                        .HasDatabaseName("ix_threat_tracks_threat_family_id");
 
-                    b.HasIndex("TargetModelId")
-                        .HasDatabaseName("ix_target_tracks_target_model_id");
+                    b.HasIndex("ThreatModelId")
+                        .HasDatabaseName("ix_threat_tracks_threat_model_id");
 
                     b.HasIndex("Status", "LastSeenAt")
-                        .HasDatabaseName("ix_target_tracks_status_last_seen_at");
+                        .HasDatabaseName("ix_threat_tracks_status_last_seen_at");
 
-                    b.HasIndex("TargetClassId", "Status")
-                        .HasDatabaseName("ix_target_tracks_target_class_id_status");
+                    b.HasIndex("ThreatClassId", "Status")
+                        .HasDatabaseName("ix_threat_tracks_threat_class_id_status");
 
-                    b.ToTable("target_tracks", (string)null);
+                    b.ToTable("threat_tracks", (string)null);
                 });
 
-            modelBuilder.Entity("Puluj.Domain.Entities.TargetTrackRevision", b =>
+            modelBuilder.Entity("Puluj.Domain.Entities.ThreatTrackRevision", b =>
                 {
-                    b.Property<long>("TargetTrackRevisionId")
+                    b.Property<long>("ThreatTrackRevisionId")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("bigint")
-                        .HasColumnName("target_track_revision_id");
+                        .HasColumnName("threat_track_revision_id");
 
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("TargetTrackRevisionId"));
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("ThreatTrackRevisionId"));
 
                     b.Property<int>("DirectionConfidence")
                         .HasColumnType("integer")
@@ -1088,33 +1091,33 @@ namespace Puluj.Infrastructure.Persistence.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("status");
 
-                    b.Property<int>("TargetCategoryId")
+                    b.Property<int>("ThreatCategoryId")
                         .HasColumnType("integer")
-                        .HasColumnName("target_category_id");
+                        .HasColumnName("threat_category_id");
 
-                    b.Property<int?>("TargetClassId")
+                    b.Property<int?>("ThreatClassId")
                         .HasColumnType("integer")
-                        .HasColumnName("target_class_id");
+                        .HasColumnName("threat_class_id");
 
-                    b.Property<int>("TargetCount")
+                    b.Property<int>("ThreatCount")
                         .HasColumnType("integer")
-                        .HasColumnName("target_count");
+                        .HasColumnName("threat_count");
 
-                    b.Property<int?>("TargetFamilyId")
+                    b.Property<int?>("ThreatFamilyId")
                         .HasColumnType("integer")
-                        .HasColumnName("target_family_id");
+                        .HasColumnName("threat_family_id");
 
-                    b.Property<long?>("TargetId")
+                    b.Property<long?>("ThreatId")
                         .HasColumnType("bigint")
-                        .HasColumnName("target_id");
+                        .HasColumnName("threat_id");
 
-                    b.Property<int?>("TargetModelId")
+                    b.Property<int?>("ThreatModelId")
                         .HasColumnType("integer")
-                        .HasColumnName("target_model_id");
+                        .HasColumnName("threat_model_id");
 
-                    b.Property<long>("TargetTrackId")
+                    b.Property<long>("ThreatTrackId")
                         .HasColumnType("bigint")
-                        .HasColumnName("target_track_id");
+                        .HasColumnName("threat_track_id");
 
                     b.Property<int>("TrackConfidence")
                         .HasColumnType("integer")
@@ -1124,29 +1127,29 @@ namespace Puluj.Infrastructure.Persistence.Migrations
                         .HasColumnType("geometry (linestring, 4326)")
                         .HasColumnName("track_geometry");
 
-                    b.HasKey("TargetTrackRevisionId")
-                        .HasName("pk_target_track_revisions");
+                    b.HasKey("ThreatTrackRevisionId")
+                        .HasName("pk_threat_track_revisions");
 
                     b.HasIndex("RevisionAt")
-                        .HasDatabaseName("ix_target_track_revisions_revision_at");
+                        .HasDatabaseName("ix_threat_track_revisions_revision_at");
 
                     NpgsqlIndexBuilderExtensions.HasMethod(b.HasIndex("RevisionAt"), "brin");
 
-                    b.HasIndex("TargetTrackId", "RevisionAt")
-                        .HasDatabaseName("ix_target_track_revisions_target_track_id_revision_at");
+                    b.HasIndex("ThreatTrackId", "RevisionAt")
+                        .HasDatabaseName("ix_threat_track_revisions_threat_track_id_revision_at");
 
-                    b.ToTable("target_track_revisions", (string)null);
+                    b.ToTable("threat_track_revisions", (string)null);
                 });
 
-            modelBuilder.Entity("Puluj.Domain.Entities.TrackTarget", b =>
+            modelBuilder.Entity("Puluj.Domain.Entities.TrackThreat", b =>
                 {
-                    b.Property<long>("TargetTrackId")
+                    b.Property<long>("ThreatTrackId")
                         .HasColumnType("bigint")
-                        .HasColumnName("target_track_id");
+                        .HasColumnName("threat_track_id");
 
-                    b.Property<long>("TargetId")
+                    b.Property<long>("ThreatId")
                         .HasColumnType("bigint")
-                        .HasColumnName("target_id");
+                        .HasColumnName("threat_id");
 
                     b.Property<double>("AssociationConfidence")
                         .HasColumnType("double precision")
@@ -1160,13 +1163,13 @@ namespace Puluj.Infrastructure.Persistence.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("sequence");
 
-                    b.HasKey("TargetTrackId", "TargetId")
-                        .HasName("pk_track_targets");
+                    b.HasKey("ThreatTrackId", "ThreatId")
+                        .HasName("pk_track_threats");
 
-                    b.HasIndex("TargetId")
-                        .HasDatabaseName("ix_track_targets_target_id");
+                    b.HasIndex("ThreatId")
+                        .HasDatabaseName("ix_track_threats_threat_id");
 
-                    b.ToTable("track_targets", (string)null);
+                    b.ToTable("track_threats", (string)null);
                 });
 
             modelBuilder.Entity("Puluj.Domain.Entities.UserLocation", b =>
@@ -1255,69 +1258,69 @@ namespace Puluj.Infrastructure.Persistence.Migrations
                     b.Navigation("Source");
                 });
 
-            modelBuilder.Entity("Puluj.Domain.Entities.Target", b =>
+            modelBuilder.Entity("Puluj.Domain.Entities.Threat", b =>
                 {
                     b.HasOne("Puluj.Domain.Entities.Place", null)
                         .WithMany()
                         .HasForeignKey("DestinationPlaceId")
                         .OnDelete(DeleteBehavior.Restrict)
-                        .HasConstraintName("fk_targets_places_destination_place_id");
+                        .HasConstraintName("fk_threats_places_destination_place_id");
 
-                    b.HasOne("Puluj.Domain.Entities.Target", null)
+                    b.HasOne("Puluj.Domain.Entities.Threat", null)
                         .WithMany()
-                        .HasForeignKey("DuplicateOfTargetId")
+                        .HasForeignKey("DuplicateOfThreatId")
                         .OnDelete(DeleteBehavior.Restrict)
-                        .HasConstraintName("fk_targets_targets_duplicate_of_target_id");
+                        .HasConstraintName("fk_threats_threats_duplicate_of_threat_id");
 
                     b.HasOne("Puluj.Domain.Entities.Place", "LocationPlace")
                         .WithMany()
                         .HasForeignKey("LocationPlaceId")
                         .OnDelete(DeleteBehavior.Restrict)
-                        .HasConstraintName("fk_targets_places_location_place_id");
+                        .HasConstraintName("fk_threats_places_location_place_id");
 
                     b.HasOne("Puluj.Domain.Entities.Place", null)
                         .WithMany()
                         .HasForeignKey("OriginPlaceId")
                         .OnDelete(DeleteBehavior.Restrict)
-                        .HasConstraintName("fk_targets_places_origin_place_id");
+                        .HasConstraintName("fk_threats_places_origin_place_id");
 
                     b.HasOne("Puluj.Domain.Entities.RawMessage", "RawMessage")
-                        .WithMany("Targets")
+                        .WithMany("Threats")
                         .HasForeignKey("RawMessageId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
-                        .HasConstraintName("fk_targets_raw_messages_raw_message_id");
+                        .HasConstraintName("fk_threats_raw_messages_raw_message_id");
 
                     b.HasOne("Puluj.Domain.Entities.Source", "Source")
                         .WithMany()
                         .HasForeignKey("SourceId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
-                        .HasConstraintName("fk_targets_sources_source_id");
+                        .HasConstraintName("fk_threats_sources_source_id");
 
-                    b.HasOne("Puluj.Domain.Entities.TargetCategory", null)
+                    b.HasOne("Puluj.Domain.Entities.ThreatCategory", null)
                         .WithMany()
-                        .HasForeignKey("TargetCategoryId")
+                        .HasForeignKey("ThreatCategoryId")
                         .OnDelete(DeleteBehavior.Restrict)
-                        .HasConstraintName("fk_targets_target_categories_target_category_id");
+                        .HasConstraintName("fk_threats_threat_categories_threat_category_id");
 
-                    b.HasOne("Puluj.Domain.Entities.TargetClass", null)
+                    b.HasOne("Puluj.Domain.Entities.ThreatClass", null)
                         .WithMany()
-                        .HasForeignKey("TargetClassId")
+                        .HasForeignKey("ThreatClassId")
                         .OnDelete(DeleteBehavior.Restrict)
-                        .HasConstraintName("fk_targets_target_classes_target_class_id");
+                        .HasConstraintName("fk_threats_threat_classes_threat_class_id");
 
-                    b.HasOne("Puluj.Domain.Entities.TargetFamily", null)
+                    b.HasOne("Puluj.Domain.Entities.ThreatFamily", null)
                         .WithMany()
-                        .HasForeignKey("TargetFamilyId")
+                        .HasForeignKey("ThreatFamilyId")
                         .OnDelete(DeleteBehavior.Restrict)
-                        .HasConstraintName("fk_targets_target_families_target_family_id");
+                        .HasConstraintName("fk_threats_threat_families_threat_family_id");
 
-                    b.HasOne("Puluj.Domain.Entities.TargetModel", null)
+                    b.HasOne("Puluj.Domain.Entities.ThreatModel", null)
                         .WithMany()
-                        .HasForeignKey("TargetModelId")
+                        .HasForeignKey("ThreatModelId")
                         .OnDelete(DeleteBehavior.Restrict)
-                        .HasConstraintName("fk_targets_target_models_target_model_id");
+                        .HasConstraintName("fk_threats_threat_models_threat_model_id");
 
                     b.Navigation("LocationPlace");
 
@@ -1326,133 +1329,133 @@ namespace Puluj.Infrastructure.Persistence.Migrations
                     b.Navigation("Source");
                 });
 
-            modelBuilder.Entity("Puluj.Domain.Entities.TargetClass", b =>
+            modelBuilder.Entity("Puluj.Domain.Entities.ThreatClass", b =>
                 {
-                    b.HasOne("Puluj.Domain.Entities.TargetCategory", "Category")
+                    b.HasOne("Puluj.Domain.Entities.ThreatCategory", "Category")
                         .WithMany("Classes")
-                        .HasForeignKey("TargetCategoryId")
+                        .HasForeignKey("ThreatCategoryId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
-                        .HasConstraintName("fk_target_classes_target_categories_target_category_id");
+                        .HasConstraintName("fk_threat_classes_threat_categories_threat_category_id");
 
                     b.Navigation("Category");
                 });
 
-            modelBuilder.Entity("Puluj.Domain.Entities.TargetFamily", b =>
+            modelBuilder.Entity("Puluj.Domain.Entities.ThreatFamily", b =>
                 {
-                    b.HasOne("Puluj.Domain.Entities.TargetClass", "Class")
+                    b.HasOne("Puluj.Domain.Entities.ThreatClass", "Class")
                         .WithMany("Families")
-                        .HasForeignKey("TargetClassId")
+                        .HasForeignKey("ThreatClassId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
-                        .HasConstraintName("fk_target_families_target_classes_target_class_id");
+                        .HasConstraintName("fk_threat_families_threat_classes_threat_class_id");
 
                     b.Navigation("Class");
                 });
 
-            modelBuilder.Entity("Puluj.Domain.Entities.TargetLink", b =>
+            modelBuilder.Entity("Puluj.Domain.Entities.ThreatLink", b =>
                 {
-                    b.HasOne("Puluj.Domain.Entities.Target", "From")
+                    b.HasOne("Puluj.Domain.Entities.Threat", "From")
                         .WithMany()
-                        .HasForeignKey("FromTargetId")
+                        .HasForeignKey("FromThreatId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
-                        .HasConstraintName("fk_target_links_targets_from_target_id");
+                        .HasConstraintName("fk_threat_links_threats_from_threat_id");
 
-                    b.HasOne("Puluj.Domain.Entities.Target", "To")
+                    b.HasOne("Puluj.Domain.Entities.Threat", "To")
                         .WithMany()
-                        .HasForeignKey("ToTargetId")
+                        .HasForeignKey("ToThreatId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
-                        .HasConstraintName("fk_target_links_targets_to_target_id");
+                        .HasConstraintName("fk_threat_links_threats_to_threat_id");
 
                     b.Navigation("From");
 
                     b.Navigation("To");
                 });
 
-            modelBuilder.Entity("Puluj.Domain.Entities.TargetModel", b =>
+            modelBuilder.Entity("Puluj.Domain.Entities.ThreatModel", b =>
                 {
-                    b.HasOne("Puluj.Domain.Entities.TargetFamily", "Family")
+                    b.HasOne("Puluj.Domain.Entities.ThreatFamily", "Family")
                         .WithMany("Models")
-                        .HasForeignKey("TargetFamilyId")
+                        .HasForeignKey("ThreatFamilyId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
-                        .HasConstraintName("fk_target_models_target_families_target_family_id");
+                        .HasConstraintName("fk_threat_models_threat_families_threat_family_id");
 
                     b.Navigation("Family");
                 });
 
-            modelBuilder.Entity("Puluj.Domain.Entities.TargetTrack", b =>
+            modelBuilder.Entity("Puluj.Domain.Entities.ThreatTrack", b =>
                 {
                     b.HasOne("Puluj.Domain.Entities.Place", null)
                         .WithMany()
                         .HasForeignKey("LastLocationPlaceId")
                         .OnDelete(DeleteBehavior.Restrict)
-                        .HasConstraintName("fk_target_tracks_places_last_location_place_id");
+                        .HasConstraintName("fk_threat_tracks_places_last_location_place_id");
 
-                    b.HasOne("Puluj.Domain.Entities.TargetCategory", null)
+                    b.HasOne("Puluj.Domain.Entities.ThreatCategory", null)
                         .WithMany()
-                        .HasForeignKey("TargetCategoryId")
+                        .HasForeignKey("ThreatCategoryId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
-                        .HasConstraintName("fk_target_tracks_target_categories_target_category_id");
+                        .HasConstraintName("fk_threat_tracks_threat_categories_threat_category_id");
 
-                    b.HasOne("Puluj.Domain.Entities.TargetClass", null)
+                    b.HasOne("Puluj.Domain.Entities.ThreatClass", null)
                         .WithMany()
-                        .HasForeignKey("TargetClassId")
+                        .HasForeignKey("ThreatClassId")
                         .OnDelete(DeleteBehavior.Restrict)
-                        .HasConstraintName("fk_target_tracks_target_classes_target_class_id");
+                        .HasConstraintName("fk_threat_tracks_threat_classes_threat_class_id");
 
-                    b.HasOne("Puluj.Domain.Entities.TargetFamily", null)
+                    b.HasOne("Puluj.Domain.Entities.ThreatFamily", null)
                         .WithMany()
-                        .HasForeignKey("TargetFamilyId")
+                        .HasForeignKey("ThreatFamilyId")
                         .OnDelete(DeleteBehavior.Restrict)
-                        .HasConstraintName("fk_target_tracks_target_families_target_family_id");
+                        .HasConstraintName("fk_threat_tracks_threat_families_threat_family_id");
 
-                    b.HasOne("Puluj.Domain.Entities.TargetModel", null)
+                    b.HasOne("Puluj.Domain.Entities.ThreatModel", null)
                         .WithMany()
-                        .HasForeignKey("TargetModelId")
+                        .HasForeignKey("ThreatModelId")
                         .OnDelete(DeleteBehavior.Restrict)
-                        .HasConstraintName("fk_target_tracks_target_models_target_model_id");
+                        .HasConstraintName("fk_threat_tracks_threat_models_threat_model_id");
                 });
 
-            modelBuilder.Entity("Puluj.Domain.Entities.TargetTrackRevision", b =>
+            modelBuilder.Entity("Puluj.Domain.Entities.ThreatTrackRevision", b =>
                 {
-                    b.HasOne("Puluj.Domain.Entities.TargetTrack", "Track")
+                    b.HasOne("Puluj.Domain.Entities.ThreatTrack", "Track")
                         .WithMany()
-                        .HasForeignKey("TargetTrackId")
+                        .HasForeignKey("ThreatTrackId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
-                        .HasConstraintName("fk_target_track_revisions_target_tracks_target_track_id");
+                        .HasConstraintName("fk_threat_track_revisions_threat_tracks_threat_track_id");
 
                     b.Navigation("Track");
                 });
 
-            modelBuilder.Entity("Puluj.Domain.Entities.TrackTarget", b =>
+            modelBuilder.Entity("Puluj.Domain.Entities.TrackThreat", b =>
                 {
-                    b.HasOne("Puluj.Domain.Entities.Target", "Target")
+                    b.HasOne("Puluj.Domain.Entities.Threat", "Threat")
                         .WithMany()
-                        .HasForeignKey("TargetId")
+                        .HasForeignKey("ThreatId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
-                        .HasConstraintName("fk_track_targets_targets_target_id");
+                        .HasConstraintName("fk_track_threats_threats_threat_id");
 
-                    b.HasOne("Puluj.Domain.Entities.TargetTrack", "Track")
-                        .WithMany("Targets")
-                        .HasForeignKey("TargetTrackId")
+                    b.HasOne("Puluj.Domain.Entities.ThreatTrack", "Track")
+                        .WithMany("Threats")
+                        .HasForeignKey("ThreatTrackId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
-                        .HasConstraintName("fk_track_targets_target_tracks_target_track_id");
+                        .HasConstraintName("fk_track_threats_threat_tracks_threat_track_id");
 
-                    b.Navigation("Target");
+                    b.Navigation("Threat");
 
                     b.Navigation("Track");
                 });
 
             modelBuilder.Entity("Puluj.Domain.Entities.RawMessage", b =>
                 {
-                    b.Navigation("Targets");
+                    b.Navigation("Threats");
                 });
 
             modelBuilder.Entity("Puluj.Domain.Entities.Source", b =>
@@ -1460,24 +1463,24 @@ namespace Puluj.Infrastructure.Persistence.Migrations
                     b.Navigation("CollectorState");
                 });
 
-            modelBuilder.Entity("Puluj.Domain.Entities.TargetCategory", b =>
+            modelBuilder.Entity("Puluj.Domain.Entities.ThreatCategory", b =>
                 {
                     b.Navigation("Classes");
                 });
 
-            modelBuilder.Entity("Puluj.Domain.Entities.TargetClass", b =>
+            modelBuilder.Entity("Puluj.Domain.Entities.ThreatClass", b =>
                 {
                     b.Navigation("Families");
                 });
 
-            modelBuilder.Entity("Puluj.Domain.Entities.TargetFamily", b =>
+            modelBuilder.Entity("Puluj.Domain.Entities.ThreatFamily", b =>
                 {
                     b.Navigation("Models");
                 });
 
-            modelBuilder.Entity("Puluj.Domain.Entities.TargetTrack", b =>
+            modelBuilder.Entity("Puluj.Domain.Entities.ThreatTrack", b =>
                 {
-                    b.Navigation("Targets");
+                    b.Navigation("Threats");
                 });
 #pragma warning restore 612, 618
         }

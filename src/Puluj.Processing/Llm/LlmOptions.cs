@@ -11,6 +11,6 @@ public sealed class LlmOptions
     public int TimeoutSeconds { get; set; } = 20;
     /// <summary>Cap on LLM calls per minute; messages beyond it fall back to rule results only.</summary>
     public int MaxCallsPerMinute { get; set; } = 20;
-    /// <summary>Bumped whenever the prompt changes; stored with every LLM-derived observation.</summary>
+    /// <summary>Bumped whenever the prompt changes; stored with every LLM-derived target.</summary>
     public string PromptVersion { get; set; } = "1";
 }

@@ -122,12 +122,12 @@ Production: `cp .env.example .env`, заповнити токени, `docker com
    | місце та роль | газетир (області, міста з відмінками) + прийменник: «з …» = звідки, «курсом на / у напрямку …» = куди, «на …щині / над / у районі» = тут; «на Київщину» (знахідний) — куди | тут **Чернігівська обл.**, куди **Київська обл.** |
    | напрямок | компасні слова, «з півночі» = розворот на 180°; інакше bearing тут → куди (позначається як «за пунктом призначення») | ~223° |
    | кількість | «5», «5х», «два», «група/декілька» (≈3), «до 10» (≈) | — |
-   | тип події | «відбій тривоги», «загроза минула», «вибухи», «працює ППО»; інакше — спостереження загрози | спостереження |
+   | тип події | «відбій тривоги», «загроза минула», «вибухи», «працює ППО»; інакше — спостереження цілі | спостереження |
    | hedge | «ймовірно», «можливо», «?» → впевненість −1 рівень | — |
 
    Списки: «Шахеди:» у заголовку застосовується до наступних рядків; «Балістика! / Дніпро — в укриття!» — загроза
    переноситься на наступний сегмент із місцем. «На півночі Київщини» зсуває точку в межах області, лишаючи тип «область».
-4. **Observation.** Класифікація рівно того рівня, який дав текст (сімейство, а не вигадана модель); упевненість alias-а
+4. **Target.** Класифікація рівно того рівня, який дав текст (сімейство, а не вигадана модель); упевненість alias-а
    обмежена довірою джерела; локація — центроїд району з радіусом і `LocationKind = Region` (точкою це не малюється);
    напрямок із упевненістю; `parser_metadata` пояснює, які правила спрацювали. Структуровані payload-и alerts.in.ua минають
    NLP: одразу `AirAlert` + факт з упевненістю `Confirmed`.
@@ -141,7 +141,7 @@ Production: `cp .env.example .env`, заповнити токени, `docker com
 
 ![Кореляція](diagrams/04-correlation.png)
 
-**Дублікат**: той самий район, клас і подія за ±3 хв з іншого повідомлення. Зберігається як Observation з `duplicate_of`,
+**Дублікат**: той самий район, клас і подія за ±3 хв з іншого повідомлення. Зберігається як Target з `duplicate_of`,
 прив'язується до треку оригіналу (provenance), інше джерело підвищує впевненість оригіналу. Стан треку не змінює.
 
 **Списки під заголовками областей** («Сумщина:» … «БпЛА курсом на Кириківку»): рядок, що складається лише з назви області,
@@ -152,10 +152,17 @@ Production: `cp .env.example .env`, заповнити токени, `docker com
 
 **Бік підльоту.** Курс до названого пункту рахується не від центру області чи міста, а від найближчої ворожої території
 (`GazetteerIndex.ApproachBearingTo`: полігони РФ і Білорусі з газетиру). «Київ: БпЛА курсом на Троєщину» ставить
-об'єкт за 15 км від Троєщини з боку Білорусі з курсом на неї (`ObservationBuilder.ApproachAnchor`, `DirectionOnly`);
+об'єкт за 15 км від Троєщини з боку Білорусі з курсом на неї (`TargetBuilder.ApproachAnchor`, `DirectionOnly`);
 так само трек із фактом лише про призначення. Газетир тепер містить усі населені пункти GeoNames (~34 тис.), тому
 для сіл з населенням < 500 назва береться лише після прийменника чи маркера («на», «біля», «курсом на», «н.п.») або
 під заголовком своєї області.
+
+**Зв'язки між цілями** (`target_links`, many-to-many, спрямовані «раніше → пізніше»): після кожної кореляції
+попередня ціль обраного треку → нова (`Continuation`, оцінка асоціації); інші треки з оцінкою ≥ порогу → нова (`Merge`:
+кілька груп зійшлись в одну), трек, який у цьому ж повідомленні вже продовжила інша ціль → нова (`Split`: група
+розпалась на частини); оцінка в [0.45; поріг) → `Possible`; дубль → `Duplicate` (1.0). Так дрон, що перелетів із
+Чернігівщини на Київщину, лишається зв'язаним із попередніми повідомленнями навіть через межу треків. У панелі деталей
+кожна ціль показує свої зв'язки («← #123 продовження 82%», «→ #130 розділення»).
 
 **Просторовий якір** (`SpatialAnchor`): факт із районом — його місце; факт лише з пунктом призначення («1 БпЛА на Конотоп») —
 підхід до цього пункту (радіус ≥ 40 км, `DestinationAnchorKm`); факт без того й іншого **не отримує треку** (лишається у стрічці).
@@ -175,7 +182,7 @@ total     = 0.30·time + 0.35·space + 0.15·direction + 0.20·class
 ```
 `total ≤ 0.3` (не приєднувати), якщо `space = 0` або **те саме джерело** за < 8 хв назвало інший пункт (район чи призначення),
 до якого об'єкт не міг долетіти — джерело перелічує різні об'єкти. Приєднання при `total ≥ 0.6` (`AttachThreshold`), інакше
-новий трек. Розклад балів (`gapKm`, `maxDistanceKm` = reach) зберігається в `threat_track_observations.association_reason`.
+новий трек. Розклад балів (`gapKm`, `maxDistanceKm` = reach) зберігається в `target_track_targets.association_reason`.
 
 **Оновлення треку**: класифікація лише уточнюється (сімейство → модель), новіший факт рухає останній район, шлях і напрямок,
 старіший (out-of-order) лише додає provenance. `track_confidence` = найкраща впевненість факту, +1 за ≥ 2 джерела,
@@ -187,7 +194,7 @@ total     = 0.30·time + 0.35·space + 0.15·direction + 0.20·class
 **Закриття**: «відбій тривоги» / «загроза минула» в області закриває її треки (`Cancelled`); `TrackWatchdog` щохвилини
 закриває треки без оновлень 2 × вікно класу (`Closed`, `timeout`).
 
-**Ревізії**: після кожної зміни — повний знімок треку в `threat_track_revisions` з часом **події** (не обробки). Стан на момент
+**Ревізії**: після кожної зміни — повний знімок треку в `target_track_revisions` з часом **події** (не обробки). Стан на момент
 T = остання ревізія кожного треку з `revision_at ≤ T` — так працює історичний режим, і дочитана з Telegram історія
 відтворюється так, як розгорталася.
 
@@ -199,11 +206,11 @@ T = остання ревізія кожного треку з `revision_at ≤ 
 |---|---|
 | `sources` | джерела, довіра, конфіг колектора |
 | `raw_messages` | оригінали; `(source_id, source_message_id)` і `hash` унікальні; `processing_status`, `attempts` |
-| `observations` | факти: подія, рівні класифікації + упевненості, локація (тип, місце, центроїд, радіус), напрямок, `duplicate_of`, `parser_metadata` |
-| `threat_tracks` / `threat_track_observations` / `threat_track_revisions` | треки, зв'язки з балами, знімки для історії |
+| `targets` | факти: подія, рівні класифікації + упевненості, локація (тип, місце, центроїд, радіус), напрямок, `duplicate_of`, `parser_metadata` |
+| `target_tracks` / `target_track_targets` / `target_track_revisions` | треки, зв'язки з балами, знімки для історії |
 | `air_alerts` | інтервали тривог по областях (лише зі структурованих джерел) |
 | `places` | газетир: області/зони (полігони), населені пункти (точки), варіанти назв-стемів, радіус |
-| `threat_categories → classes → families → models`, `threat_model_aliases` | таксономія з `metadata` (швидкість, fade, вікно кореляції) та словник назв |
+| `target_categories → classes → families → models`, `target_model_aliases` | таксономія з `metadata` (швидкість, fade, вікно кореляції) та словник назв |
 | `collector_states`, `processing_errors` | курсори/здоров'я колекторів, помилки |
 
 Ланцюжок походження: карта → трек → зв'язки → факти → оригінали → джерело → URL. Нічого не видаляється.
@@ -216,7 +223,7 @@ T = остання ревізія кожного треку з `revision_at ≤ 
 | `GET /api/snapshot?at=&activeOnly=` | стан карти зараз (треки + тривоги) або на момент `at` з ревізій (`historical: true`) |
 | `GET /api/tracks/{id}` | трек і всі його факти з джерелом, довірою, текстом оригіналу, посиланням, балом зв'язку |
 | `GET /api/timeline?from&to&bucketMinutes` | гістограма для повзунка відтворення |
-| `GET /api/observations?since&until&limit` | стрічка спостережень (новіші перші); `until` — для вікна відтворення |
+| `GET /api/targets?since&until&limit` | стрічка спостережень (новіші перші); `until` — для вікна відтворення |
 | `GET /api/taxonomy`, `/api/sources` | довідники; в таксономії — швидкості, fade, `displayMode` |
 | `GET /api/places/search?q=`, `/api/places/regions`, `/api/places/{id}/geometry` | пошук пункту (лише центроїд), полігони регіонів і районів Києва (кеш 1 год) |
 | `GET /api/health` | БД + свіжість колекторів: `ok` / `stale` (немає успіху > 3× інтервалу → `Degraded`) / `idle` (колектор вимкнено) |
@@ -224,9 +231,9 @@ T = остання ревізія кожного треку з `revision_at ≤ 
 | `POST /api/dev/ingest` | лише Development: вкинути повідомлення чи payload тривоги як від колектора |
 | SignalR `/hubs/map` | `TrackUpserted`, `TrackClosed`, `AlertChanged` (аргумент — той самий DTO, що й у snapshot) |
 
-`TrackDto`: `threat` (коди/назви всіх рівнів, `label` найглибшого, `displayMode`, `fadeMinutes`, `speedProfile`),
+`TrackDto`: `target` (коди/назви всіх рівнів, `label` найглибшого, `displayMode`, `fadeMinutes`, `speedProfile`),
 `modelConfidence`, `trackConfidence`, `lastLocation {kind, placeId, placeName, point, accuracyKm}`, `trackGeometry`,
-`direction {degrees, kind: Compass|TowardsPlace, confidence}`, `observationCount`, `distinctSourceCount`. JSON camelCase,
+`direction {degrees, kind: Compass|TowardsPlace, confidence}`, `targetCount`, `distinctSourceCount`. JSON camelCase,
 `null` пропускаються, геометрія — GeoJSON.
 
 ![Реальний час і історія](diagrams/05-realtime-history.png)
@@ -259,12 +266,12 @@ ETA («дані застарілі» після 2×). **Теми** (◐ у ве�
 темні теми додають клас `dark` і темну підкладку карти.
 **Вікно області** (`RegionPopup`, у точці кліку по області без цілі): поточна тривога (тип, рівень, початок, тривалість)
 або коли закінчилась остання, і кількість та сумарний час тривог за добу (`GET /api/alerts/history?placeId=&hours=24`).
-**Стрічка** підсвічує повідомлення виділеної цілі (`ObservationDto.trackId`) і позначає в тексті сегмент, з якого
+**Стрічка** підсвічує повідомлення виділеної цілі (`TargetDto.trackId`) і позначає в тексті сегмент, з якого
 побудовано факт (`Highlight`, у згорнутому рядку — сегмент із контекстом); рядки сусідів по повідомленню — світлішою смужкою.
 Кластеризація маркерів лишилась тільки для практично збіжних точок (радіус 6 px до зуму 10), щоб сусідні пункти не
 згортались в один кружок.
 Точка користувача: пошук пункту, клік на карті або геолокація за кліком; зберігається лише в `localStorage`. Із заданою
-точкою — прапорець **«підсвічувати загрози»**: червоне кільце — ціль поруч (≤ 25 км, для області — всередині полігона або
+точкою — прапорець **«підсвічувати цілі»**: червоне кільце — ціль поруч (≤ 25 км, для області — всередині полігона або
 ≤ 25 км від його краю), помаранчеве — ETA рахується, тобто курс у ваш бік.
 
 **ETA** (`web/src/eta/computeEta.ts`, тести `npm test`) рахується в браузері з `TrackDto`:
@@ -282,19 +289,19 @@ eta_min = (d_edge, або max(0, d − accuracy)) / v_max − elapsed;   eta_max
 
 ## Експлуатація
 
-**Логи** (Serilog, JSON у Production): `RawMessage N (<source>): K observation(s)`; `no facts in "…"` — правила не
+**Логи** (Serilog, JSON у Production): `RawMessage N (<source>): K target(s)`; `no facts in "…"` — правила не
 впізнали текст; `Track N opened` / `attached to track N (score)` / `closed (reason)`; `RawMessage N failed`;
 `Collector <name> crashed; restarting in …` (backoff 5 с → 5 хв, інші колектори не зачіпаються).
 
 **Метрики** (OpenTelemetry, meter `Puluj`, експорт OTLP): `puluj.rawmessages.received{source}`,
-`puluj.source.latency{source}` (received − published), `puluj.observations.created{source,method}`,
+`puluj.source.latency{source}` (received − published), `puluj.targets.created{source,method}`,
 `puluj.parser.unmatched{source}`, `puluj.processing.errors{stage}`, `puluj.llm.calls{outcome}`.
 
 | Симптом | Куди дивитись |
 |---|---|
 | повідомлення є, маркера нема | `raw_messages.processing_status`, `processing_errors`, лог `no facts` → додати alias / кейс у корпус |
-| об'єкти злилися або розпалися | `threat_track_observations.association_reason`; `Correlation__AttachThreshold`, `SlackKm` |
-| модель визначена надто впевнено | `observations.identification_source` — який alias; його `confidence` у seed |
+| об'єкти злилися або розпалися | `target_track_targets.association_reason`; `Correlation__AttachThreshold`, `SlackKm` |
+| модель визначена надто впевнено | `targets.identification_source` — який alias; його `confidence` у seed |
 | тривога не з'являється / не зникає | `air_alerts`, `collector_states`, `/api/health`; лог `unknown location` → `regions.json` |
 | порожня карта після рестарту | геодані не завантажені (`Gazetteer: 0 settlements`); Api стартував раніше за seed — перечитає за 15 с |
 | `dotnet build`: DLL locked | `scripts/dev-run.ps1 -Stop` |

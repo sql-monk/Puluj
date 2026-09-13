@@ -9,7 +9,7 @@ public interface IMapClient
     Task TrackUpserted(TrackDto track);
     Task TrackClosed(TrackDto track);
     Task AlertChanged(AlertDto alert);
-    Task ObservationCreated(ObservationDto observation);
+    Task TargetCreated(TargetDto target);
 }
 
 public sealed class MapHub : Hub<IMapClient>

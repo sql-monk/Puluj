@@ -1,7 +1,7 @@
 # Puluj
 
 Цивільне ситуаційне оповіщення про повітряні загрози з відкритих джерел: збір повідомлень (alerts.in.ua, Telegram),
-нормалізація → `Observation` → `ThreatTrack`, карта з напрямком руху, ETA до вашої точки та повним ланцюжком джерел.
+нормалізація → `Target` → `TargetTrack`, карта з напрямком руху, ETA до вашої точки та повним ланцюжком джерел.
 Специфікація — [`Puluj.md`](Puluj.md). Головний принцип: *«Що саме ми показуємо, звідки це взялося і наскільки ми в цьому впевнені?»*
 
 ## Документація
@@ -18,7 +18,7 @@
 | `src/Puluj.Domain` | сутності та enum-и (§5–§11 spec) |
 | `src/Puluj.Infrastructure` | EF Core + PostGIS, міграції, seed (таксономія, джерела, газетир), ingestion, NOTIFY |
 | `src/Puluj.Collectors` | `AlertsInUaCollector`, `TelegramCollector` (WTelegramClient), supervisor з backoff |
-| `src/Puluj.Processing` | Normalizer, RuleParser, LlmParser, ObservationBuilder, Correlator, TrackWatchdog |
+| `src/Puluj.Processing` | Normalizer, RuleParser, LlmParser, TargetBuilder, Correlator, TrackWatchdog |
 | `src/Puluj.Worker` | хост збору та обробки (міграції + seed при старті) |
 | `src/Puluj.Api` | REST (`/api/*`), SignalR (`/hubs/map`), роздача SPA |
 | `web/` | React + Vite + MapLibre; ETA рахується в браузері |
@@ -58,7 +58,7 @@ python scripts/dev-scenario.py             # демо-ситуація чере�
 | `Correlation__AttachThreshold` (0.6), `Correlation__DuplicateWindow` (3 хв) | кореляція/дедуплікація |
 | `Seed__DataDirectory` | шлях до `data/` (за замовчуванням шукається вгору від content root) |
 
-Канали Telegram та довіра до джерел задаються у `data/sources.json`; таксономія загроз і aliases — у `data/taxonomy/`
+Канали Telegram та довіра до джерел задаються у `data/sources.json`; таксономія цілей і aliases — у `data/taxonomy/`
 (upsert при кожному старті Worker, без змін коду).
 
 ## Тести
@@ -76,8 +76,8 @@ cd web && npm test                                # ETA / fade
 
 | Endpoint | Опис |
 |---|---|
-| `GET /api/snapshot?at=&activeOnly=` | стан карти зараз або на момент `at` (історичний режим, з `ThreatTrackRevision`) |
-| `GET /api/tracks/{id}` | трек + усі observations, джерела, оригінальні тексти (provenance chain) |
+| `GET /api/snapshot?at=&activeOnly=` | стан карти зараз або на момент `at` (історичний режим, з `TargetTrackRevision`) |
+| `GET /api/tracks/{id}` | трек + усі targets, джерела, оригінальні тексти (provenance chain) |
 | `GET /api/timeline?from&to&bucketMinutes` | гістограма для слайдера історії |
 | `GET /api/taxonomy`, `GET /api/sources` | довідники (швидкісні профілі, fade) |
 | `GET /api/places/search?q=`, `GET /api/places/regions`, `GET /api/places/{id}/geometry` | газетир |
