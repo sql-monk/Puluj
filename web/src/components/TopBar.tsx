@@ -3,7 +3,7 @@ import { THEMES, useStore, type Theme } from '../store/useStore'
 export type Page = 'ukraine' | 'kyiv'
 
 
-export default function TopBar({ page, onPage, menuOpen, onToggleMenu, onOpenSettings, onReplay, replay, setupHint }: { page: Page; onPage: (p: Page) => void; menuOpen: boolean; onToggleMenu: () => void; onOpenSettings: () => void; onReplay: () => void; replay: boolean; setupHint: boolean }) {
+export default function TopBar({ page, onPage, menuOpen, onToggleMenu, onReplay, replay }: { page: Page; onPage: (p: Page) => void; menuOpen: boolean; onToggleMenu: () => void; onReplay: () => void; replay: boolean }) {
   const connection = useStore((s) => s.connection)
   const mode = useStore((s) => s.mode)
   const at = useStore((s) => s.at)
@@ -50,16 +50,8 @@ export default function TopBar({ page, onPage, menuOpen, onToggleMenu, onOpenSet
           ⏱ <span className="hidden sm:inline">Історія</span>
         </button>
         {error && <span className="rounded bg-red-600 px-2 py-0.5 text-xs text-white">{error}</span>}
-        {setupHint && (
-          <button className="rounded bg-amber-500 px-2 py-0.5 text-xs font-medium text-white hover:bg-amber-600" onClick={onOpenSettings}>
-            Джерела не налаштовані →
-          </button>
-        )}
         <span className={`inline-block h-2.5 w-2.5 rounded-full ${dot}`} title={status} />
         <span className="hidden text-xs text-slate-500 sm:inline dark:text-slate-400">{status}</span>
-        <button className="rounded px-2 py-1 hover:bg-slate-200 dark:hover:bg-slate-700" title="Налаштування" onClick={onOpenSettings} aria-label="Налаштування">
-          ⚙
-        </button>
         <label className="flex items-center gap-1 rounded px-1 py-1 hover:bg-slate-200 dark:hover:bg-slate-700" title="Кольорова тема">
           <span aria-hidden>◐</span>
           <select className="max-w-28 bg-transparent text-xs outline-none" value={theme} onChange={(e) => setTheme(e.target.value as Theme)} aria-label="Кольорова тема">

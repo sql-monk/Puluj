@@ -1,0 +1,66 @@
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
+using Puluj.Admin;
+using Puluj.Api;
+using Puluj.Api.Services;
+using Puluj.Infrastructure;
+using Puluj.Infrastructure.Settings;
+using Serilog;
+
+// The admin panel: settings, source rating, per-component status, logs. Runs as its own service on its own port
+// with the read-write database role; the public map Api runs elsewhere with a read-only one.
+var builder = WebApplication.CreateBuilder(args);
+builder.Configuration.AddPulujDatabaseSettings();
+
+builder.Services.AddSerilog((sp, cfg) => cfg
+    .ReadFrom.Configuration(builder.Configuration)
+    .ReadFrom.Services(sp)
+    .Enrich.FromLogContext()
+    .Enrich.WithProperty("app", "puluj-admin"));
+
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(r => r.AddService("puluj-admin"))
+    .WithTracing(t => t.AddAspNetCoreInstrumentation().AddHttpClientInstrumentation().AddOtlpExporter())
+    .WithMetrics(m => m.AddAspNetCoreInstrumentation().AddRuntimeInstrumentation().AddMeter(PulujMetrics.MeterName).AddOtlpExporter());
+
+builder.Services.AddPulujInfrastructure(builder.Configuration);
+builder.Services.ConfigureHttpJsonOptions(o => ApiDependencyInjection.ConfigureJson(o.SerializerOptions));
+builder.Services.AddProblemDetails();
+builder.Services.AddHttpClient("admin-test");
+builder.Services.AddHttpClient("api-probe");
+builder.Services.AddOpenApi();
+builder.Services.AddCors(o => o.AddPolicy("dev", p => p.WithOrigins("http://localhost:5174", "http://127.0.0.1:5174").AllowAnyHeader().AllowAnyMethod()));
+builder.Services.AddSingleton<ReferenceCache>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ReferenceCache>());
+builder.Services.AddSingleton<DtoMapper>();
+builder.Services.AddSingleton<SnapshotService>();
+builder.Services.AddSingleton<LogReader>();
+builder.Services.AddHealthChecks()
+    .AddNpgSql(sp => builder.Configuration.GetConnectionString(Puluj.Infrastructure.DependencyInjection.ConnectionStringName)!, name: "postgres", tags: ["db"]);
+
+var app = builder.Build();
+
+app.UseSerilogRequestLogging();
+app.UseExceptionHandler();
+app.UseStatusCodePages();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseCors("dev");
+    app.MapOpenApi();
+}
+
+app.MapHealthChecks("/api/health", new HealthCheckOptions { ResponseWriter = HealthResponseWriter.WriteAsync });
+app.MapAdminEndpoints();
+app.MapOpsEndpoints();
+
+// The admin SPA is built as admin.html (second Vite entry of the shared web/ code base).
+app.UseDefaultFiles(new DefaultFilesOptions { DefaultFileNames = ["admin.html"] });
+app.UseStaticFiles();
+app.MapFallbackToFile("admin.html");
+
+app.Run();
+
+public partial class Program;

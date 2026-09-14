@@ -1,4 +1,6 @@
-// Settings UI client. The admin token (if the server has one) is kept in localStorage and sent as X-Admin-Token.
+// Admin panel client (served by Puluj.Admin, same origin). The admin token (if the server has one) is kept in
+// localStorage and sent as X-Admin-Token.
+import type { SourceRatingReportDto } from './types'
 
 export interface SettingDto {
   key: string
@@ -56,6 +58,80 @@ export interface AdminStatusDto {
 export interface TestResultDto {
   ok: boolean
   message: string
+}
+
+// ---- Operations (status, statistics, logs) ----
+
+export interface ServiceStatusDto {
+  name: string
+  status: 'ok' | 'warn' | 'down' | 'unknown'
+  detail?: string
+  lastSeen?: string
+}
+export interface OpsOverviewDto {
+  generatedAt: string
+  services: ServiceStatusDto[]
+  db: { version: string; sizeBytes: number; connections: number; lastMigration?: string; migrationCount: number }
+}
+export interface CollectorStatusDto {
+  sourceId: number
+  code: string
+  name: string
+  type: string
+  enabled: boolean
+  lastPolledAt?: string
+  lastSuccessAt?: string
+  lastMessageAt?: string
+  lastError?: string
+  consecutiveFailures: number
+  messages24h: number
+  /** Messages received per hour for the last 24 hours, oldest first. */
+  perHour: number[]
+}
+export interface HourlyProcessingDto {
+  hour: string
+  received: number
+  processed: number
+  targets: number
+  links: number
+  errors: number
+}
+export interface ProcessingErrorDto {
+  id: number
+  occurredAt: string
+  stage: string
+  message: string
+  sourceId?: number
+  rawMessageId?: number
+  exception?: string
+}
+export interface ProcessingReportDto {
+  queue: Record<string, number>
+  hours: HourlyProcessingDto[]
+  recentErrors: ProcessingErrorDto[]
+  errorsByStage24h: Record<string, number>
+  targets24h: number
+  links24h: number
+  duplicates24h: number
+}
+export interface DbReportDto {
+  version: string
+  sizeBytes: number
+  tables: { name: string; rows: number; bytes: number }[]
+  migrations: string[]
+  connections: { role: string; connections: number }[]
+}
+export interface LogFileDto {
+  name: string
+  service: string
+  bytes: number
+  modifiedAt: string
+}
+export interface LogTailDto {
+  file: string
+  lines: string[]
+  truncated: boolean
+  bytes: number
 }
 
 const TOKEN_KEY = 'puluj.adminToken'
@@ -117,4 +193,19 @@ export const admin = {
   deleteSource: (id: number) => call<void>('DELETE', `/api/admin/sources/${id}`),
   telegramCode: (code: string) => call<void>('POST', '/api/admin/telegram/code', { code }),
   testAlerts: (token?: string) => call<TestResultDto>('POST', '/api/admin/test/alerts', {}, token ? { 'X-Test-Token': token } : undefined),
+  /** Earned source rating with per-day history, copy pairs and groups. */
+  sourceRating: (days = 14) => call<SourceRatingReportDto>('GET', `/api/admin/sources/rating?days=${days}`),
+  ops: {
+    overview: () => call<OpsOverviewDto>('GET', '/api/admin/ops/overview'),
+    collectors: () => call<CollectorStatusDto[]>('GET', '/api/admin/ops/collectors'),
+    processing: () => call<ProcessingReportDto>('GET', '/api/admin/ops/processing'),
+    db: () => call<DbReportDto>('GET', '/api/admin/ops/db'),
+    logFiles: () => call<LogFileDto[]>('GET', '/api/admin/logs/files'),
+    logTail: (file: string, lines: number, filter: string, level: string) => {
+      const q = new URLSearchParams({ file, lines: String(lines) })
+      if (filter) q.set('filter', filter)
+      if (level) q.set('level', level)
+      return call<LogTailDto>('GET', `/api/admin/logs?${q}`)
+    },
+  },
 }

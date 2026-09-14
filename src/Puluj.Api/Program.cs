@@ -24,9 +24,11 @@ builder.Services.AddOpenTelemetry()
 
 builder.Services.AddPulujInfrastructure(builder.Configuration);
 builder.Services.AddPulujApi(builder.Configuration);
+builder.Services.AddResponseCompression(o => o.MimeTypes = ["application/json", "application/geo+json", "text/plain"]);
 
 var app = builder.Build();
 
+app.UseResponseCompression();
 app.UseSerilogRequestLogging();
 app.UseExceptionHandler();
 app.UseStatusCodePages();

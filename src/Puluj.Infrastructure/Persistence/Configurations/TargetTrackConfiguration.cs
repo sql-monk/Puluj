@@ -16,6 +16,8 @@ public class TargetTrackConfiguration : IEntityTypeConfiguration<TargetTrack>
 
         b.HasIndex(x => x.LastLocation).HasMethod("gist");
         b.HasIndex(x => new { x.Status, x.LastSeenAt });
+        // Correlation candidates: active or timed-out tracks last seen inside the window (an OR the status index cannot serve).
+        b.HasIndex(x => x.LastSeenAt);
         b.HasIndex(x => new { x.TargetClassId, x.Status });
 
         b.HasOne<TargetCategory>().WithMany().HasForeignKey(x => x.TargetCategoryId).OnDelete(DeleteBehavior.Restrict);

@@ -71,6 +71,7 @@ public sealed class RawMessageProcessor(
                 return 0;
             }
 
+            var parsedMs = sw.ElapsedMilliseconds;
             db.Targets.AddRange(targets);
             raw.ProcessingStatus = ProcessingStatus.Processed;
             raw.ProcessedAt = clock.GetUtcNow();
@@ -84,6 +85,7 @@ public sealed class RawMessageProcessor(
             }
             await db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
+            logger.LogDebug("RawMessage {Id}: parse {ParseMs} ms, store + sinks {SinkMs} ms", raw.RawMessageId, parsedMs, sw.ElapsedMilliseconds - parsedMs);
             foreach (var evt in events)
             {
                 await notifier.PublishAsync(evt, ct);
@@ -115,10 +117,15 @@ public sealed class RawMessageProcessor(
 
     private async Task<List<Target>> ParseTextAsync(RawMessage raw, Source source, CancellationToken ct)
     {
+        var sw = Stopwatch.StartNew();
         var normalized = normalizer.Normalize(raw.RawText!);
-        var ctx = new ParseContext(source.SourceId, normalized.Language, HomeRegionOf(source));
+        var normalizeMs = sw.ElapsedMilliseconds;
+        var ctx = new ParseContext(source.SourceId, normalized.Language, HomeRegionOf(source), raw.PublishedAt);
         var facts = await parser.ParseAsync(normalized, ctx, ct);
-        return facts.Select(f => builder.Build(f, raw, source, f.ParserVersion, f.Method, normalized.Language)).ToList();
+        var parseMs = sw.ElapsedMilliseconds - normalizeMs;
+        var targets = facts.Select(f => builder.Build(f, raw, source, f.ParserVersion, f.Method, normalized.Language)).ToList();
+        logger.LogDebug("RawMessage {Id}: normalize {NormalizeMs} ms, rules {RulesMs} ms, build {BuildMs} ms", raw.RawMessageId, normalizeMs, parseMs, sw.ElapsedMilliseconds - normalizeMs - parseMs);
+        return targets;
     }
 
     /// <summary>Source config may name a home region ("Київська область") or give a place id; used to disambiguate settlement names.</summary>

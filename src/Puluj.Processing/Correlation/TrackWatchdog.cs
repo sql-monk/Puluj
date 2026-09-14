@@ -9,7 +9,13 @@ using Puluj.Processing.Indexes;
 
 namespace Puluj.Processing.Correlation;
 
-/// <summary>Closes tracks that have not been updated for 2x their class correlation window (spec §12 fading ends in closure).</summary>
+/// <summary>
+/// Closes tracks that have not been updated for 2x their class correlation window (spec §12 fading ends in closure).
+/// The closure is stamped at event time (last seen + the timeout), never at wall-clock time, so a replay sees the
+/// track end when it faded. While the pipeline is behind (a rebuild or a history load: pending messages older than
+/// half an hour), "now" is the oldest pending message's time, so tracks of 2022 are not closed under the feet of the
+/// 2022 messages still to come.
+/// </summary>
 public sealed class TrackWatchdog(
     IDbContextFactory<PulujDbContext> factory,
     IndexProvider indexes,
@@ -41,21 +47,26 @@ public sealed class TrackWatchdog(
 
     private async Task SweepAsync(CancellationToken ct)
     {
-        var now = clock.GetUtcNow();
+        var wall = clock.GetUtcNow();
         await using var db = await factory.CreateDbContextAsync(ct);
+        var oldestPending = await db.RawMessages.AsNoTracking()
+            .Where(r => r.ProcessingStatus == ProcessingStatus.Pending)
+            .MinAsync(r => (DateTimeOffset?)r.PublishedAt, ct);
+        var now = oldestPending is { } p && p < wall.AddMinutes(-30) ? p : wall;
         var active = await db.TargetTracks.Where(t => t.Status == TrackStatus.Active).ToListAsync(ct);
         var closed = new List<long>();
         foreach (var t in active)
         {
             var window = indexes.Taxonomy.ClassProfile(t.TargetClassId)?.CorrelationWindowMinutes ?? 30;
-            if (now - t.LastSeenAt < TimeSpan.FromMinutes(window * options.CurrentValue.CloseAfterWindows))
+            var closeAt = t.LastSeenAt + TimeSpan.FromMinutes(window * options.CurrentValue.CloseAfterWindows);
+            if (closeAt > now)
             {
                 continue;
             }
             t.Status = TrackStatus.Closed;
             t.ClosedReason = "timeout";
-            t.UpdatedAt = now;
-            db.TargetTrackRevisions.Add(TrackUpdater.Revision(t, null, now));
+            t.UpdatedAt = closeAt > t.UpdatedAt ? closeAt : t.UpdatedAt;
+            db.TargetTrackRevisions.Add(TrackUpdater.Revision(t, null, t.UpdatedAt));
             closed.Add(t.TargetTrackId);
         }
         // Free-text alerts rarely get an explicit "відбій" for every raion: expire them after a few hours.
@@ -65,7 +76,7 @@ public sealed class TrackWatchdog(
             .ToListAsync(ct);
         foreach (var a in expired)
         {
-            a.EndedAt = now;
+            a.EndedAt = a.StartedAt + Structured.TextAlertSink.MaxAge;
         }
         if (closed.Count == 0 && expired.Count == 0)
         {

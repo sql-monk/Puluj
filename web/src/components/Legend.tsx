@@ -9,24 +9,17 @@ export default function Legend() {
       <div className="font-medium text-slate-800 dark:text-slate-100">Легенда</div>
       {(['uav', 'cruise', 'ballistic', 'aircraft'] as const).map((m) => (
         <div key={m} className="flex items-center gap-2">
-          <span className="inline-block h-3 w-3 rounded-full" style={{ background: p.marker[m] }} />
+          <span className="inline-block h-3 w-3 rounded-full" style={{ background: p.marker[m], boxShadow: `0 0 0 2px ${p.markerEdge[m]}` }} />
           {m === 'uav' ? 'БпЛА / КАБ' : m === 'cruise' ? 'Крилаті ракети' : m === 'ballistic' ? 'Балістика / аеробалістика' : 'Авіація'}
         </div>
       ))}
       <div className="flex items-center gap-2">
-        <span className="inline-flex w-6 items-center justify-between">
-          <span className="inline-block h-2 w-2 rounded-full opacity-50" style={{ background: p.marker.uav }} />
-          <span className="inline-block h-0 w-3 border-t border-dotted" style={{ borderColor: p.vector.uav }} />
-        </span>
-        сліди: де ціль була раніше, з часом (для виділеної — завжди)
-      </div>
-      <div className="flex items-center gap-2">
-        <span className="inline-block w-6 border-t-[2px] border-dashed" style={{ borderColor: p.vector.uav }} /> прогноз курсу на кілька хвилин (розрахунок), шеврон = напрямок
+        <span className="inline-block w-6 border-t-[2px] border-dashed" style={{ borderColor: p.vectorMuted }} /> прогноз курсу на кілька хвилин (розрахунок), шеврон = напрямок
       </div>
       <div className="flex items-center gap-2">
         <span
           className="inline-block h-3 w-6"
-          style={{ backgroundImage: `repeating-linear-gradient(135deg, ${p.vector.uav} 0 2px, transparent 2px 6px)` }}
+          style={{ backgroundImage: `repeating-linear-gradient(135deg, ${p.vectorMuted} 0 2px, transparent 2px 6px)` }}
         />
         зона ймовірного руху (ширша — курс менш певний)
       </div>
@@ -38,8 +31,17 @@ export default function Legend() {
         бейджі: кількість джерел · цілей у групі
       </div>
       <div className="flex items-center gap-2">
-        <span className="inline-block h-3 w-3 rounded-full" style={{ background: p.selection, outline: `2px solid ${p.marker.uav}` }} /> виділена ціль ·
-        <span className="inline-block h-3 w-3 rounded-full" style={{ background: p.marker.uav, outline: `2px solid ${p.selection}` }} /> сусіди з того ж повідомлення
+        <span className="inline-block h-3 w-3 shrink-0 rounded-full" style={{ background: p.selected.uav, outline: `2px solid ${p.marker.uav}` }} /> виділена ціль: контрастний колір з обвідкою кольору класу (клік по вектору теж виділяє; клік по зв'язку відкриває вікно зв'язку)
+      </div>
+      <div className="flex items-center gap-2">
+        <span className="inline-flex w-6 shrink-0 items-center justify-between">
+          <span className="inline-block h-2 w-2 rounded-full opacity-50" style={{ background: p.selected.uav }} />
+          <span className="inline-block h-0 w-3 border-t border-dotted" style={{ borderColor: p.selected.uav }} />
+        </span>
+        ймовірні попередники виділеної цілі (до 2 поколінь) і куди ще вони могли полетіти: піктограми цілей з повідомлень, лінії товщі й контрастніші за більшої ймовірності
+      </div>
+      <div className="flex items-center gap-2">
+        <span className="inline-block h-3 w-5 shrink-0 outline outline-2" style={{ background: `${p.border}22`, outlineColor: p.border }} /> район під курсором (назва — біля курсора)
       </div>
       <div className="flex items-center gap-2">
         <span className="inline-block h-3 w-3 rounded-full border-2" style={{ borderColor: p.hazardNear }} /> поруч з вашою точкою

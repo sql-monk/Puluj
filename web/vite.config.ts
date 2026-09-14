@@ -3,7 +3,8 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { defineConfig } from 'vite'
 
-// Dev server proxies API + SignalR to the .NET Api (see src/Puluj.Api/Properties/launchSettings.json).
+// The user app (map). Dev server proxies API + SignalR to the .NET Api (see src/Puluj.Api/Properties/launchSettings.json).
+// The admin panel is a second entry with its own config: vite.admin.config.ts → Puluj.Admin.
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   // maplibre-gl v6 loads its worker via new URL('./maplibre-gl-worker.mjs', import.meta.url);

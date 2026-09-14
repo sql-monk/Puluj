@@ -1,5 +1,7 @@
 import { create } from 'zustand'
-import type { AlertDto, DisplayMode, TargetDto, RegionDto, SourceDto, TrackDto } from '../api/types'
+import type { Geometry } from 'geojson'
+import { api } from '../api/client'
+import type { AlertDto, PredecessorsDto, DisplayMode, TargetDto, RegionDto, SourceDto, TrackDto } from '../api/types'
 import type { Home } from '../eta/computeEta'
 import { getPalette, type MapPalette } from '../map/palette'
 
@@ -28,6 +30,16 @@ export function themeMapIsDark(theme: Theme): boolean {
 }
 export type Connection = 'connected' | 'reconnecting' | 'disconnected'
 
+/** A leg of the selected target's family the viewer clicked: the two reports it joins and its probability. */
+export interface SelectedLink {
+  trackId: number
+  fromTargetId: number
+  toTargetId: number
+  probability: number
+  pathProbability: number
+  kind: string
+}
+
 export interface Filters {
   uav: boolean
   cruise: boolean
@@ -35,9 +47,7 @@ export interface Filters {
   aircraft: boolean
   alerts: boolean
   activeOnly: boolean
-  /** Crumbs (earlier reported positions with times) for every target, not only the selected one. */
-  crumbs: boolean
-  /** Forecast cone and dashed centreline ahead of the marker. */
+  /** Forecast cone and dashed centreline ahead of every marker (crumbs and predecessors belong to the selected target only). */
   forecast: boolean
   /** Highlight tracks near the viewer's point or heading towards it (needs a home point). */
   highlightTargets: boolean
@@ -59,13 +69,19 @@ interface State {
   filters: Filters
   home: Home | null
   theme: Theme
-  /** Left panel (filters) shown; persisted so it stays hidden once the viewer folds it. */
+  /** Left panel (filters) shown; folded by default, persisted once the viewer toggles it. */
   panelOpen: boolean
   selectedTrackId: number | null
+  /** The clicked leg between two reports of the selected target's family (its window is open). */
+  selectedLink: SelectedLink | null
   /** Feed of recent targets, newest first (live mode only). */
   targets: TargetDto[]
   /** Oblast clicked on the map: highlighted border + feed filter. */
   selectedRegionId: number | null
+  /** Probable predecessors (two generations) of the selected track's newest report; null while loading or none. */
+  predecessors: PredecessorsDto | null
+  /** Polygons fetched one by one for alerts on places the regions payload does not carry (hromadas, cities). */
+  placeGeometries: Record<number, Geometry>
   loading: boolean
   error: string | null
 
@@ -82,9 +98,12 @@ interface State {
   setTheme: (t: Theme) => void
   setPanelOpen: (open: boolean) => void
   select: (id: number | null) => void
+  selectLink: (link: SelectedLink | null) => void
   setTargets: (list: TargetDto[]) => void
   addTarget: (o: TargetDto) => void
   selectRegion: (id: number | null) => void
+  loadPredecessors: (trackId: number | null) => void
+  ensurePlaceGeometry: (placeId: number) => void
   setLoading: (v: boolean) => void
   setError: (e: string | null) => void
 }
@@ -115,6 +134,8 @@ function save(key: string, value: unknown) {
   }
 }
 
+const pendingGeometries = new Set<number>()
+
 export const defaultFilters: Filters = {
   uav: true,
   cruise: true,
@@ -122,14 +143,13 @@ export const defaultFilters: Filters = {
   aircraft: false,
   alerts: true,
   activeOnly: true,
-  crumbs: false,
   forecast: true,
   highlightTargets: true,
   sources: null,
   lifetimeMinutes: 15,
 }
 
-export const useStore = create<State>((set) => ({
+export const useStore = create<State>((set, get) => ({
   tracks: {},
   alerts: {},
   regions: [],
@@ -142,11 +162,14 @@ export const useStore = create<State>((set) => ({
   home: load<Home | null>(HOME_KEY, null),
   // Unknown or retired ids (the old "system") fall back to the plain dark theme.
   theme: ((t) => (THEMES.some((x) => x.id === t) ? t : 'dark'))(load<Theme>(THEME_KEY, 'dark')),
-  // Phones start with the panel folded (it is a bottom sheet there); desktops start with it open.
-  panelOpen: load<boolean>(PANEL_KEY, typeof window !== 'undefined' && window.innerWidth >= 768),
+  // The map opens uncluttered: the panel stays folded until the viewer opens it (then their choice is remembered).
+  panelOpen: load<boolean>(PANEL_KEY, false),
   selectedTrackId: null,
+  selectedLink: null,
   targets: [],
   selectedRegionId: null,
+  predecessors: null,
+  placeGeometries: {},
   loading: false,
   error: null,
 
@@ -188,7 +211,31 @@ export const useStore = create<State>((set) => ({
     save(PANEL_KEY, panelOpen)
     set({ panelOpen })
   },
-  select: (selectedTrackId) => set({ selectedTrackId }),
+  select: (selectedTrackId) => set((s) => ({ selectedTrackId, selectedLink: null, predecessors: s.selectedTrackId === selectedTrackId ? s.predecessors : null })),
+  selectLink: (selectedLink) => set({ selectedLink }),
+  loadPredecessors: (trackId) => {
+    if (trackId === null) {
+      set({ predecessors: null })
+      return
+    }
+    api
+      .predecessors(trackId, 2)
+      .then((p) => {
+        if (get().selectedTrackId === trackId) set({ predecessors: p })
+      })
+      .catch(() => {
+        if (get().selectedTrackId === trackId) set({ predecessors: null })
+      })
+  },
+  ensurePlaceGeometry: (placeId) => {
+    if (get().placeGeometries[placeId] || pendingGeometries.has(placeId)) return
+    pendingGeometries.add(placeId)
+    api
+      .placeGeometry(placeId)
+      .then((g) => set((s) => ({ placeGeometries: { ...s.placeGeometries, [placeId]: g } })))
+      .catch(() => undefined)
+      .finally(() => pendingGeometries.delete(placeId))
+  },
   setTargets: (targets) => set({ targets }),
   addTarget: (o) =>
     set((s) => (s.mode === 'live' && !s.targets.some((x) => x.id === o.id) ? { targets: [o, ...s.targets].slice(0, 500) } : {})),

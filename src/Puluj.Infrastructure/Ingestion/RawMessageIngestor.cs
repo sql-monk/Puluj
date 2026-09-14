@@ -3,22 +3,26 @@ using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Npgsql;
+using Puluj.Infrastructure.Messaging;
 using Puluj.Infrastructure.Persistence;
 
 namespace Puluj.Infrastructure.Ingestion;
 
 /// <summary>
 /// Stores a RawMessage exactly once (spec §5 idempotency: unique (source, source_message_id) and unique hash),
-/// records source latency and wakes the processing loop.
+/// records source latency and wakes the processing loop through NOTIFY, so collectors and the processor may live in
+/// different processes (the Pending sweep in ProcessingLoop covers a lost notification).
 /// </summary>
 public sealed class RawMessageIngestor(
     IDbContextFactory<PulujDbContext> factory,
-    IRawMessageQueue queue,
+    INotifyPublisher notifier,
     PulujMetrics metrics,
     TimeProvider clock,
     ILogger<RawMessageIngestor> logger)
 {
-    public async Task<IngestResult> IngestAsync(IncomingMessage msg, string sourceCode, CancellationToken ct)
+    /// <param name="enqueue">False while a history load is running: the message is stored Pending and the sweeper
+    /// picks it up later in publication order, together with everything else the load brings.</param>
+    public async Task<IngestResult> IngestAsync(IncomingMessage msg, string sourceCode, CancellationToken ct, bool enqueue = true)
     {
         var receivedAt = clock.GetUtcNow();
         var hash = ComputeHash(sourceCode, msg.RawText, msg.RawPayload?.RootElement.GetRawText());
@@ -49,7 +53,10 @@ public sealed class RawMessageIngestor(
         if (result is long id)
         {
             metrics.RawReceived(sourceCode, receivedAt - msg.PublishedAt);
-            await queue.EnqueueAsync(id, ct);
+            if (enqueue)
+            {
+                await notifier.PublishAsync(new PulujEvent(PulujEventType.RawMessageStored, id, receivedAt), ct);
+            }
             logger.LogDebug("RawMessage {Id} from {Source}/{SourceMessageId}", id, sourceCode, msg.SourceMessageId);
             return new IngestResult(id, true);
         }

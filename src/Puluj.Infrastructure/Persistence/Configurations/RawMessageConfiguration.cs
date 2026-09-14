@@ -19,6 +19,8 @@ public class RawMessageConfiguration : IEntityTypeConfiguration<RawMessage>
         b.HasIndex(x => x.Hash).IsUnique();
 
         b.HasIndex(x => x.ProcessingStatus).HasFilter("processing_status = 0");
+        // The sweep takes pending messages oldest-published first; the watchdog asks for the oldest pending one.
+        b.HasIndex(x => x.PublishedAt, "ix_raw_messages_pending_published").HasDatabaseName("ix_raw_messages_pending_published").HasFilter("processing_status = 0");
         b.HasIndex(x => x.ReceivedAt).HasMethod("brin");
         b.HasIndex(x => x.PublishedAt).HasMethod("brin");
 

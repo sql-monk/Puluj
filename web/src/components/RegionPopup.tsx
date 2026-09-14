@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
 import type { AlertDto } from '../api/types'
 import { clock, dateTime } from '../lib/format'
+import { placeWindow, useDraggable } from '../lib/useDraggable'
 import { useStore } from '../store/useStore'
 
 interface Props {
@@ -42,6 +43,8 @@ export default function RegionPopup({ map, placeId, anchor, onClose }: Props) {
   const [error, setError] = useState<string | null>(null)
   const lon = anchor[0]
   const lat = anchor[1]
+  // Dragged by its header; the offset is forgotten when another region is clicked.
+  const drag = useDraggable(placeId)
 
   useEffect(() => {
     const update = () => {
@@ -84,9 +87,9 @@ export default function RegionPopup({ map, placeId, anchor, onClose }: Props) {
     if (left + WIDTH > rightLimit) left = Math.max(8, pos.x - GAP - WIDTH)
     let top = pos.y + GAP
     if (top + h > box.height - 8) top = Math.max(52, pos.y - GAP - h)
-    node.style.left = `${left}px`
-    node.style.top = `${top}px`
+    placeWindow(node, left, top, drag.offset.current, box, WIDTH)
   })
+  void drag.tick
 
   const stats = useMemo(() => {
     if (!history) return null
@@ -116,7 +119,7 @@ export default function RegionPopup({ map, placeId, anchor, onClose }: Props) {
 
   return (
     <div ref={el} className="pointer-events-auto absolute z-20 rounded-lg bg-white/95 text-xs shadow-xl backdrop-blur dark:bg-slate-900/95 dark:text-slate-100" style={{ width: WIDTH, left: -9999, top: -9999 }} onClick={(e) => e.stopPropagation()}>
-      <div className="flex items-start justify-between gap-2 px-2.5 pt-2">
+      <div className={`flex items-start justify-between gap-2 px-2.5 pt-2 ${drag.handleProps.className}`} onPointerDown={drag.handleProps.onPointerDown} title={drag.handleProps.title}>
         <div className="text-sm font-semibold">{region?.name ?? `Регіон #${placeId}`}</div>
         <button className="shrink-0 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200" onClick={onClose} aria-label="Закрити">
           ✕

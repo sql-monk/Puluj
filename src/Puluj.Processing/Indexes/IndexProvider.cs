@@ -98,8 +98,18 @@ public sealed class IndexProvider(IDbContextFactory<PulujDbContext> factory, ILo
             .Select(p => new { p.PlaceId, p.Name, p.Level, p.ParentId, p.CountryCode, p.Population, p.Centroid, p.RadiusKm, p.NameVariants, p.Geometry })
             .ToListAsync(ct);
         // Only areal geometries are kept as boundaries; settlements are points and their centroid already says it all.
+        // Boundaries are simplified (~1 km for oblasts, ~200 m below): the correlator measures polygon-to-polygon gaps
+        // for every candidate, which is quadratic in vertex count, and a report "on the oblast" is not a 1 km fact.
         return new GazetteerIndex(rows.Select(r =>
             (new PlaceEntry(r.PlaceId, r.Name, r.Level, r.ParentId, r.CountryCode, r.Population ?? 0, r.Centroid, r.RadiusKm,
-                r.Geometry is NetTopologySuite.Geometries.IPolygonal ? r.Geometry : null), r.NameVariants)));
+                r.Geometry is NetTopologySuite.Geometries.IPolygonal ? Simplify(r.Geometry, r.Level) : null), r.NameVariants)));
+    }
+
+    private static NetTopologySuite.Geometries.Geometry Simplify(NetTopologySuite.Geometries.Geometry g, PlaceLevel level)
+    {
+        var tolerance = level is PlaceLevel.Region or PlaceLevel.Country ? 0.01 : 0.002;
+        var s = NetTopologySuite.Simplify.TopologyPreservingSimplifier.Simplify(g, tolerance);
+        s.SRID = g.SRID;
+        return s.IsEmpty ? g : s;
     }
 }

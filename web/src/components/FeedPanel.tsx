@@ -25,8 +25,6 @@ export default function FeedPanel({ open, onToggle }: { open: boolean; onToggle:
   const at = useStore((s) => s.at)
   const filters = useStore((s) => s.filters)
   const selectedTrackId = useStore((s) => s.selectedTrackId)
-  const selectedTrack = useStore((s) => (s.selectedTrackId ? s.tracks[s.selectedTrackId] : undefined))
-  const selectedMessages = useMemo(() => new Set(selectedTrack?.messageIds ?? []), [selectedTrack])
   const palette = usePalette()
   const [expanded, setExpanded] = useState<number | null>(null)
 
@@ -84,13 +82,12 @@ export default function FeedPanel({ open, onToggle }: { open: boolean; onToggle:
           </li>
         )}
         {list.map((o) => {
-          const color = o.type ? (palette.marker[o.type.displayMode] ?? palette.marker.uav) : o.eventType === 'AirRaidAlert' ? palette.alertRedLine : o.eventType === 'AlertCancelled' || o.eventType === 'TargetCancelled' ? palette.home : '#64748b'
+          const color = o.type ? (palette.marker[o.type.displayMode] ?? palette.marker.uav) : o.eventType === 'AirRaidAlert' ? palette.alertRedLine : o.eventType === 'AlertCancelled' || o.eventType === 'TargetCancelled' ? '#16a34a' : '#64748b'
           const mine = selectedTrackId !== null && o.trackId === selectedTrackId
-          const withSelected = !mine && selectedTrackId !== null && selectedMessages.has(o.rawMessage.id)
           const isOpen = expanded === o.id
           const text = o.rawMessage.text ?? o.segmentText ?? ''
           return (
-            <li key={o.id} className={`border-b border-slate-100 px-3 py-2 dark:border-slate-800 ${o.duplicateOfTargetId ? 'opacity-70' : ''} ${fresh(o) ? 'bg-indigo-50 dark:bg-indigo-950/40' : ''} ${mine ? 'border-l-4 bg-amber-50 dark:bg-amber-900/30' : withSelected ? 'border-l-4 border-l-slate-300 dark:border-l-slate-600' : ''}`} style={mine ? { borderLeftColor: color } : undefined}>
+            <li key={o.id} className={`border-b border-slate-100 px-3 py-2 dark:border-slate-800 ${o.duplicateOfTargetId ? 'opacity-70' : ''} ${fresh(o) ? 'bg-indigo-50 dark:bg-indigo-950/40' : ''} ${mine ? 'border-l-4 bg-amber-50 dark:bg-amber-900/30' : ''}`} style={mine ? { borderLeftColor: color } : undefined}>
               <div className="flex items-baseline gap-2">
                 <span className="font-mono">{clock(o.observedAt)}</span>
                 <span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ background: color }} />

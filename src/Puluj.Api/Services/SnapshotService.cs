@@ -7,7 +7,7 @@ using Puluj.Infrastructure.Persistence;
 namespace Puluj.Api.Services;
 
 /// <summary>Read side: live snapshot, historical replay from revisions (spec §20), track details with provenance (spec §18).</summary>
-public sealed class SnapshotService(IDbContextFactory<PulujDbContext> factory, DtoMapper mapper, TimeProvider clock)
+public sealed class SnapshotService(IDbContextFactory<PulujDbContext> factory, DtoMapper mapper, TimeProvider clock, ReferenceCache refs)
 {
     /// <summary>Tracks that ended earlier than this before `at` are not part of a snapshot.</summary>
     private static readonly TimeSpan RecentWindow = TimeSpan.FromHours(3);
@@ -60,6 +60,61 @@ public sealed class SnapshotService(IDbContextFactory<PulujDbContext> factory, D
             alerts.Select(mapper.Alert).ToList());
     }
 
+    /// <summary>A replay window may span at most this much.</summary>
+    private static readonly TimeSpan MaxReplayWindow = TimeSpan.FromHours(36);
+
+    /// <summary>
+    /// The tracks of a replay window with every position they were reported at (from their revisions): the client draws
+    /// each one moving between consecutive reports. Tracks last reported up to RecentWindow before the window start
+    /// are included so that whatever was still on the map at the start is there.
+    /// </summary>
+    public async Task<ReplayDto> ReplayAsync(DateTimeOffset from, DateTimeOffset to, CancellationToken ct)
+    {
+        if (to < from)
+        {
+            (from, to) = (to, from);
+        }
+        if (to - from > MaxReplayWindow)
+        {
+            from = to - MaxReplayWindow;
+        }
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var since = from - RecentWindow;
+        var revisions = await db.TargetTrackRevisions.AsNoTracking()
+            .Where(r => r.LastSeenAt >= since && r.LastSeenAt <= to && r.RevisionAt <= to)
+            .OrderBy(r => r.TargetTrackId).ThenBy(r => r.LastSeenAt).ThenBy(r => r.RevisionAt)
+            .ToListAsync(ct);
+        var tracks = new List<ReplayTrackDto>();
+        foreach (var group in revisions.GroupBy(r => r.TargetTrackId))
+        {
+            var samples = new List<ReplaySampleDto>();
+            TargetTrackRevision? last = null;
+            foreach (var r in group)
+            {
+                last = r;
+                var loc = mapper.Location(r.LastLocationKind, r.LastLocationPlaceId, r.LastLocation, r.LastLocationAccuracyKm);
+                if (loc?.Point is null)
+                {
+                    continue;
+                }
+                var direction = r.DirectionKind == DirectionKind.Unknown ? null : r.DirectionDeg;
+                var sample = new ReplaySampleDto(r.LastSeenAt, loc.Point, direction, r.LastLocationKind == LocationKind.DirectionOnly);
+                // A revision that changed nothing about the position (a new source, a count) adds no sample.
+                if (samples.Count > 0 && samples[^1].At == sample.At && samples[^1].Point.EqualsExact(sample.Point))
+                {
+                    continue;
+                }
+                samples.Add(sample);
+            }
+            if (samples.Count == 0 || last is null)
+            {
+                continue;
+            }
+            tracks.Add(new ReplayTrackDto(group.Key, mapper.TargetType(last.TargetCategoryId, last.TargetClassId, last.TargetFamilyId, last.TargetModelId), samples));
+        }
+        return new ReplayDto(from, to, tracks);
+    }
+
     public async Task<TrackDto?> TrackAsync(long id, CancellationToken ct)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
@@ -87,41 +142,104 @@ public sealed class SnapshotService(IDbContextFactory<PulujDbContext> factory, D
     /// <summary>How many earlier positions travel with a track (the current one included).</summary>
     private const int MaxFixes = 4;
 
-    /// <summary>The last MaxFixes distinct reported positions of a track, oldest first; repeats of the same place collapse.</summary>
-    private List<FixDto> Fixes(IEnumerable<Target> targets)
-    {
-        var fixes = new List<FixDto>();
-        foreach (var o in targets.Where(o => o.DuplicateOfTargetId == null && o.EventType == EventType.TargetObserved).OrderBy(o => o.ObservedAt))
-        {
-            var fix = mapper.Fix(o);
-            if (fix is null)
-            {
-                continue;
-            }
-            if (fixes.Count > 0 && fixes[^1].PlaceName == fix.PlaceName && fixes[^1].Approach == fix.Approach)
-            {
-                fixes[^1] = fix; // the same place again: keep the newer time
-                continue;
-            }
-            fixes.Add(fix);
-        }
-        return fixes.Count > MaxFixes ? fixes.GetRange(fixes.Count - MaxFixes, MaxFixes) : fixes;
-    }
-
+    /// <summary>
+    /// The chain behind each track's newest target, from the kinematic links the database keeps (puluj_target_chain):
+    /// at every step the most probable predecessor, with its probability. Oldest first, the current target last.
+    /// </summary>
     private async Task<Dictionary<long, List<FixDto>>> FixesAsync(PulujDbContext db, List<long> trackIds, DateTimeOffset? at, CancellationToken ct)
     {
         if (trackIds.Count == 0)
         {
             return [];
         }
-        var rows = await db.TrackTargets.AsNoTracking()
-            .Where(l => trackIds.Contains(l.TargetTrackId) && (at == null || l.Target!.ObservedAt <= at))
-            .Select(l => new { l.TargetTrackId, Target = l.Target! })
+        // The newest target of each track (as of `at` in history mode).
+        var heads = await db.TrackTargets.AsNoTracking()
+            // Duplicates carry no kinematic links of their own (the trigger moves them onto the original), so the head is
+            // the newest original report.
+            .Where(l => trackIds.Contains(l.TargetTrackId) && (at == null || l.Target!.ObservedAt <= at) && l.Target!.DuplicateOfTargetId == null)
+            .GroupBy(l => l.TargetTrackId)
+            .Select(g => new { TrackId = g.Key, TargetId = g.OrderByDescending(l => l.Target!.ObservedAt).ThenByDescending(l => l.TargetId).Select(l => l.TargetId).First() })
             .ToListAsync(ct);
-        return rows.GroupBy(r => r.TargetTrackId).ToDictionary(g => g.Key, g => Fixes(g.Select(r => r.Target)));
+        var result = new Dictionary<long, List<FixDto>>();
+        foreach (var head in heads)
+        {
+            result[head.TrackId] = await ChainAsync(db, head.TargetId, ct);
+        }
+        return result;
     }
 
-    /// <summary>Distinct sources behind each track (optionally as of an instant), for the per-source filter and the badge.</summary>
+    // Unmapped query types follow the snake_case naming convention: the SQL columns are used as they are.
+    private sealed record ChainRow(int Step, long TargetId, double Probability);
+    private sealed record FamilyRow(int Generation, long FromTargetId, long ToTargetId, int Kind, double Probability, double PathProbability, bool Ancestral);
+
+    /// <summary>
+    /// The family of the track's newest target (puluj_target_family): every probable predecessor `depth` generations
+    /// back — the whole fork, not only the best chain — and where else each of those predecessors could have flown,
+    /// with the probability of each link and along each path.
+    /// </summary>
+    public async Task<PredecessorsDto?> PredecessorsAsync(long trackId, int depth, CancellationToken ct)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var head = await db.TrackTargets.AsNoTracking()
+            .Where(l => l.TargetTrackId == trackId && l.Target!.DuplicateOfTargetId == null)
+            .OrderByDescending(l => l.Target!.ObservedAt).ThenByDescending(l => l.TargetId)
+            .Select(l => l.TargetId)
+            .FirstOrDefaultAsync(ct);
+        if (head == 0)
+        {
+            return null;
+        }
+        var rows = await db.Database.SqlQuery<FamilyRow>($"SELECT generation, from_target_id, to_target_id, kind, probability, path_probability, ancestral FROM puluj_target_family({head}, {depth})").ToListAsync(ct);
+        var ids = rows.SelectMany(r => new[] { r.FromTargetId, r.ToTargetId }).Append(head).Distinct().ToList();
+        var targets = await db.Targets.AsNoTracking().Where(t => ids.Contains(t.TargetId)).ToDictionaryAsync(t => t.TargetId, ct);
+        // An ancestor's generation is its shortest way up from the head; a relative sits one below the ancestor it hangs from.
+        var generation = new Dictionary<long, int>();
+        var ancestral = new HashSet<long> { head };
+        foreach (var r in rows.Where(r => r.Ancestral))
+        {
+            ancestral.Add(r.FromTargetId);
+            generation[r.FromTargetId] = Math.Min(generation.GetValueOrDefault(r.FromTargetId, int.MaxValue), r.Generation);
+        }
+        foreach (var r in rows.Where(r => !r.Ancestral))
+        {
+            generation.TryAdd(r.ToTargetId, r.Generation - 1);
+        }
+        var nodes = new List<PredecessorDto>();
+        foreach (var (id, t) in targets)
+        {
+            var fix = mapper.Fix(t, 1);
+            if (fix is null)
+            {
+                continue;
+            }
+            var type = mapper.TargetType(t.TargetCategoryId ?? 0, t.TargetClassId, t.TargetFamilyId, t.TargetModelId);
+            var direction = t.DirectionKind == DirectionKind.Unknown ? null : t.DirectionDeg;
+            nodes.Add(new PredecessorDto(id, generation.GetValueOrDefault(id, 0), ancestral.Contains(id), fix.At, fix.PlaceName, fix.Kind, fix.Point, fix.AccuracyKm, fix.Approach,
+                t.SegmentText is { Length: > 90 } st ? st[..90] + "…" : t.SegmentText, type.DisplayMode, type.Label, direction));
+        }
+        var links = rows
+            .Where(r => targets.ContainsKey(r.FromTargetId) && targets.ContainsKey(r.ToTargetId))
+            .Select(r => new PredecessorLinkDto(r.FromTargetId, r.ToTargetId, r.Generation, r.Ancestral, ((TargetLinkKind)r.Kind).ToString(), r.Probability, r.PathProbability))
+            .ToList();
+        return new PredecessorsDto(trackId, head, nodes.OrderBy(n => n.Generation).ThenByDescending(n => n.At).ToList(), links);
+    }
+
+    private async Task<List<FixDto>> ChainAsync(PulujDbContext db, long headTargetId, CancellationToken ct)
+    {
+        var rows = await db.Database.SqlQuery<ChainRow>($"SELECT step, target_id, probability FROM puluj_target_chain({headTargetId}, {MaxFixes - 1})").ToListAsync(ct);
+        var ids = rows.Select(r => r.TargetId).ToList();
+        var targets = await db.Targets.AsNoTracking().Where(t => ids.Contains(t.TargetId)).ToDictionaryAsync(t => t.TargetId, ct);
+        var fixes = new List<FixDto>();
+        foreach (var r in rows.OrderByDescending(r => r.Step))
+        {
+            if (targets.TryGetValue(r.TargetId, out var t) && mapper.Fix(t, r.Probability) is { } fix)
+            {
+                fixes.Add(fix);
+            }
+        }
+        return fixes;
+    }
+
     private static async Task<Dictionary<long, int[]>> SourceIdsAsync(PulujDbContext db, List<long> trackIds, DateTimeOffset? at, CancellationToken ct)
     {
         if (trackIds.Count == 0)
@@ -157,11 +275,13 @@ public sealed class SnapshotService(IDbContextFactory<PulujDbContext> factory, D
             .ToListAsync(ct);
         IReadOnlyList<TargetLinkDto> LinksOf(long targetId) => targetLinks
             .Where(l => l.FromTargetId == targetId || l.ToTargetId == targetId)
-            .Select(l => l.FromTargetId == targetId
-                ? new TargetLinkDto(l.ToTargetId, l.Kind.ToString(), l.Confidence, "to")
-                : new TargetLinkDto(l.FromTargetId, l.Kind.ToString(), l.Confidence, "from"))
+            .OrderByDescending(l => l.Probability)
+            .Select(l => new TargetLinkDto(l.FromTargetId == targetId ? l.ToTargetId : l.FromTargetId, l.Kind.ToString(), l.Probability,
+                l.FromTargetId == targetId ? "to" : "from", l.DistanceKm, l.MinutesApart, l.HeadingDiffDeg, l.RequiredMinutes))
             .ToList();
-        return new TrackDetailsDto(mapper.Track(t, sourceIds, Fixes(links.Select(l => l.Target!)), messageIds), links.Select(l => mapper.Target(l.Target!, l.AssociationConfidence, id, LinksOf(l.TargetId))).ToList());
+        var head = links.Where(l => l.Target!.DuplicateOfTargetId == null).OrderByDescending(l => l.Target!.ObservedAt).ThenByDescending(l => l.TargetId).Select(l => l.TargetId).FirstOrDefault();
+        var fixes = head == 0 ? [] : await ChainAsync(db, head, ct);
+        return new TrackDetailsDto(mapper.Track(t, sourceIds, fixes, messageIds), links.Select(l => mapper.Target(l.Target!, l.AssociationConfidence, id, LinksOf(l.TargetId))).ToList());
     }
 
     /// <summary>Newest targets first (feed panel). Duplicates are kept — they are provenance too.</summary>
@@ -214,7 +334,13 @@ public sealed class SnapshotService(IDbContextFactory<PulujDbContext> factory, D
             return null;
         }
         var trackOf = await TrackOfAsync(db, [id], ct);
-        return mapper.Target(o, null, trackOf.TryGetValue(id, out var t) ? t : null);
+        // Its kinematic links both ways, most probable first: the link window shows the numbers behind a probability.
+        var links = (await db.TargetLinks.AsNoTracking().Where(l => l.FromTargetId == id || l.ToTargetId == id).ToListAsync(ct))
+            .OrderByDescending(l => l.Probability)
+            .Select(l => new TargetLinkDto(l.FromTargetId == id ? l.ToTargetId : l.FromTargetId, l.Kind.ToString(), l.Probability,
+                l.FromTargetId == id ? "to" : "from", l.DistanceKm, l.MinutesApart, l.HeadingDiffDeg, l.RequiredMinutes))
+            .ToList();
+        return mapper.Target(o, null, trackOf.TryGetValue(id, out var t) ? t : null, links);
     }
 
     public async Task<AlertDto?> AlertAsync(long id, CancellationToken ct)
@@ -252,4 +378,52 @@ public sealed class SnapshotService(IDbContextFactory<PulujDbContext> factory, D
         }
         return buckets;
     }
+
+    private sealed record RatingRow(int SourceId, DateOnly Day, int Targets, int Copies, int CopiedBy, double? AvgLeadSeconds, double? Rating);
+
+    /// <summary>Source rating over the last `days`: per-day rows from the source_rating_daily view, copy pairs, and copy groups.</summary>
+    public async Task<SourceRatingReportDto> SourceRatingAsync(int days, CancellationToken ct)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        days = Math.Clamp(days, 1, 90);
+        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(clock.GetUtcNow(), Kyiv).DateTime);
+        var since = today.AddDays(-(days - 1));
+        var rows = await db.Database.SqlQuery<RatingRow>($"""
+            SELECT source_id, day, targets, copies, copied_by, avg_lead_seconds, rating::float AS rating
+            FROM source_rating_daily WHERE day >= {since}
+            """).ToListAsync(ct);
+        var copies = await db.SourceCopies.AsNoTracking().Where(c => c.Day >= since).ToListAsync(ct);
+        var pairs = copies.GroupBy(c => (c.CopierSourceId, c.OriginalSourceId))
+            .Select(g => new SourceCopyDto(g.Key.CopierSourceId, g.Key.OriginalSourceId, g.Sum(c => c.Count), g.Sum(c => c.DelaySecondsSum) / Math.Max(1, g.Sum(c => c.Count))))
+            .OrderByDescending(p => p.Count)
+            .ToList();
+        var totals = rows.GroupBy(r => r.SourceId).ToDictionary(g => g.Key, g => g.Sum(r => r.Targets));
+        // A copy relation that carries at least 3 facts and at least 30 % of the copier's output joins the two sources
+        // into one group (transitively).
+        var parent = new Dictionary<int, int>();
+        int Find(int x) => parent.TryGetValue(x, out var p) && p != x ? parent[x] = Find(p) : (parent.TryAdd(x, x) ? x : x);
+        foreach (var p in pairs.Where(p => p.Count >= 3 && p.Count >= 0.3 * totals.GetValueOrDefault(p.CopierId)))
+        {
+            var a = Find(p.CopierId);
+            var b = Find(p.OriginalId);
+            if (a != b)
+            {
+                parent[a] = b;
+            }
+        }
+        var groups = parent.Keys.GroupBy(Find).Where(g => g.Count() > 1).Select((g, i) => (Index: i + 1, Members: g.OrderBy(x => x).ToList())).ToList();
+        var groupOf = groups.SelectMany(g => g.Members.Select(m => (m, g.Index))).ToDictionary(x => x.m, x => x.Index);
+        var dayList = Enumerable.Range(0, days).Select(i => since.AddDays(i)).ToList();
+        var sources = refs.Sources.Values.OrderByDescending(s => s.Priority).Select(src =>
+        {
+            var mine = rows.Where(r => r.SourceId == src.SourceId).ToDictionary(r => r.Day);
+            var series = dayList.Select(d => mine.TryGetValue(d, out var r) ? new SourceRatingDayDto(d, r.Targets, r.Copies, r.CopiedBy, r.AvgLeadSeconds, r.Rating) : new SourceRatingDayDto(d, 0, 0, 0, null, null)).ToList();
+            var weighted = series.Where(x => x.Rating is not null && x.Targets > 0).ToList();
+            var rating = weighted.Count == 0 ? (double?)null : Math.Round(weighted.Sum(x => x.Rating!.Value * x.Targets) / weighted.Sum(x => x.Targets), 3);
+            return new SourceRatingDto(src.SourceId, src.Name, src.TrustLevel, rating, groupOf.TryGetValue(src.SourceId, out var g) ? g : null, series);
+        }).ToList();
+        return new SourceRatingReportDto(dayList, sources, pairs, groups.Select(g => (IReadOnlyList<int>)g.Members).ToList());
+    }
+
+    private static readonly TimeZoneInfo Kyiv = TimeZoneInfo.FindSystemTimeZoneById("Europe/Kyiv");
 }

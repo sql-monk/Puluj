@@ -2,9 +2,10 @@ import destination from '@turf/destination'
 import distance from '@turf/distance'
 import { point } from '@turf/helpers'
 import type { Feature, FeatureCollection, GeoJsonProperties, Geometry, LineString, Point, Polygon, MultiPolygon, Position } from 'geojson'
-import type { AlertDto, AlertLevel, Confidence, RegionDto, TrackDto } from '../api/types'
+import type { AlertDto, AlertLevel, Confidence, PredecessorLinkDto, PredecessorsDto, RegionDto, TrackDto } from '../api/types'
 import { computeEta, distanceToRegionKm, type Home } from '../eta/computeEta'
-import { displayModeEnabled, type Filters } from '../store/useStore'
+import type { ReplayPosition } from '../replay/engine'
+import { displayModeEnabled, type Filters, type SelectedLink } from '../store/useStore'
 
 import { getPalette, type MapPalette } from './palette'
 
@@ -15,8 +16,9 @@ export interface TrackProps {
   id: number
   label: string
   mode: string
+  /** Marker / last-known-area colour: the class colour, or the class's selection colour when selected. */
   color: string
-  /** Colour of the movement vector (brighter than the marker colour). */
+  /** Colour of the forecast vector: the selection colour of the selected target, the theme's neutral grey otherwise. */
   vector: string
   opacity: number
   rotation: number
@@ -32,20 +34,34 @@ export interface TrackProps {
   count: number
   hazard: HazardKind
   selected: boolean
-  /** Reported in the same message as the selected target. */
-  neighbor: boolean
 }
 
 /** A crumb: where the target was reported earlier, with the time; or the dotted link between crumbs. */
 export interface FixProps {
   id: number
   mode: string
+  /** The selected target's selection colour (crumbs and predecessors exist only for the selected target). */
   vector: string
   /** "Ромни 21:40" — the place (if known) and the time of that report. */
   label: string
   opacity: number
   approach: boolean
-  selected: boolean
+  /** 0..1 from the kinematic link (1 for the marker itself). */
+  probability: number
+  /** The node's reported course, when it had one: the glyph is an arrow turned by it, else a dot. */
+  hasDirection: boolean
+  rotation: number
+  /** Glyph size (icon-size before the map's icon scale); 0 on a leg. */
+  size: number
+  /** Generations above the head (family only): 1 = parent's level, 2 = grandparent's, 0 = the head's own. */
+  generation?: number
+  /** A family leg: the two reports it joins, its own and its path probability, its kind, and whether it is the clicked one. */
+  from?: number
+  to?: number
+  linkProbability?: number
+  pathProbability?: number
+  linkKind?: string
+  selectedLink?: boolean
 }
 
 export interface TrackLayers {
@@ -55,6 +71,7 @@ export interface TrackLayers {
   /** Dashed forecast centreline, hatched probability cone and the chevron at its end. */
   forecasts: FeatureCollection<LineString | Point | Polygon, TrackProps>
   areas: FeatureCollection<Polygon | MultiPolygon, TrackProps>
+  predecessors: FeatureCollection<Point | LineString, FixProps>
 }
 
 /** The forecast reaches this far ahead: a short pointer, not a flight plan. */
@@ -74,6 +91,10 @@ export interface TrackLayerOptions {
   selectedId?: number | null
   /** Theme palette; the light one when omitted. */
   palette?: MapPalette
+  /** The predecessor fork of the selected track, drawn instead of its crumbs. */
+  predecessors?: PredecessorsDto | null
+  /** The leg the viewer clicked, drawn with a halo. */
+  selectedLink?: SelectedLink | null
 }
 
 /** Tracks that pass the class, status and source filters and are not fully faded. */
@@ -120,22 +141,22 @@ export function buildTrackLayers(tracks: TrackDto[], now: Date, regionsById: Map
   const fixes: Feature<Point | LineString, FixProps>[] = []
   const forecasts: Feature<LineString | Point | Polygon, TrackProps>[] = []
   const areas: Feature<Polygon | MultiPolygon, TrackProps>[] = []
+  const predecessors: Feature<Point | LineString, FixProps>[] = []
   const home = filters.highlightTargets ? (opts.home ?? null) : null
   const palette = opts.palette ?? getPalette('light')
-  // Targets listed in the same message as the selected one light up with it.
-  const selectedTrack = opts.selectedId == null ? undefined : tracks.find((t) => t.id === opts.selectedId)
-  const selectedMessages = new Set(selectedTrack?.messageIds ?? [])
 
   for (const t of tracks) {
     // Fades over the viewer's lifetime setting, never below 0.45: a faint marker is unreadable, and the age is on the card.
     const opacity = t.status === 'Active' ? Math.max(0.45, 1 - 0.55 * (ageMinutes(t, now) / Math.max(1, filters.lifetimeMinutes))) : 0.25
     const selected = opts.selectedId === t.id
+    const mode = t.type.displayMode
+    const selectedColor = palette.selected[mode] ?? palette.selected.uav
     const props: TrackProps = {
       id: t.id,
       label: t.type.label,
-      mode: t.type.displayMode,
-      color: palette.marker[t.type.displayMode] ?? palette.marker.uav,
-      vector: palette.vector[t.type.displayMode] ?? palette.vector.uav,
+      mode,
+      color: selected ? selectedColor : (palette.marker[mode] ?? palette.marker.uav),
+      vector: selected ? selectedColor : palette.vectorMuted,
       opacity,
       rotation: t.direction?.degrees ?? 0,
       hasDirection: !!t.direction,
@@ -147,14 +168,13 @@ export function buildTrackLayers(tracks: TrackDto[], now: Date, regionsById: Map
       count: t.objectCount && t.objectCount > 1 ? t.objectCount : 0,
       hazard: home ? hazardKind(t, home, now, regionsById) : '',
       selected,
-      neighbor: !selected && selectedMessages.size > 0 && t.messageIds.some((m) => selectedMessages.has(m)),
     }
     const loc = t.lastLocation
     if (loc?.point) {
       points.push({ type: 'Feature', id: t.id, geometry: loc.point, properties: props })
 
       // Region / area level locations are drawn as the area itself, never as a precise dot (spec §6).
-      if ((loc.kind === 'Region' || loc.kind === 'Area') && loc.placeId) {
+      if ((loc.kind === 'Region' || loc.kind === 'Area' || loc.kind === 'District') && loc.placeId) {
         const region = regionsById.get(loc.placeId)
         if (region && (region.geometry.type === 'Polygon' || region.geometry.type === 'MultiPolygon')) {
           areas.push({ type: 'Feature', id: t.id, geometry: region.geometry as Polygon | MultiPolygon, properties: props })
@@ -173,22 +193,130 @@ export function buildTrackLayers(tracks: TrackDto[], now: Date, regionsById: Map
         forecasts.push({ type: 'Feature', id: t.id, geometry: end.geometry, properties: props })
       }
     }
+    // The selected target shows its whole predecessor fork instead of the single best chain.
+    const fork = opts.predecessors && opts.predecessors.trackId === t.id && opts.predecessors.links.length > 0 ? opts.predecessors : null
+    if (fork && loc?.point) {
+      const byId = new Map(fork.targets.map((n) => [n.targetId, n]))
+      const headPoint = loc.point
+      const pointOf = (id: number): Position | null => (id === fork.headTargetId ? headPoint.coordinates : (byId.get(id)?.point?.coordinates ?? null))
+      const located = (l: PredecessorLinkDto) => pointOf(l.fromTargetId) !== null && pointOf(l.toTargetId) !== null
+      const clamp = (v: number) => Math.max(0.05, Math.min(1, v))
+      // Ancestry: every parent, and behind each parent its two most probable grandparents (the rest is in the details
+      // list; on the map it would only be a tangle of faint legs).
+      const gen2Rank = new Map<number, number>()
+      const shown = fork.links
+        .filter((l) => l.ancestral && located(l))
+        .sort((x, y) => x.generation - y.generation || y.pathProbability - x.pathProbability)
+        .filter((l) => {
+          if (l.generation < 2) return true
+          const rank = gen2Rank.get(l.toTargetId) ?? 0
+          gen2Rank.set(l.toTargetId, rank + 1)
+          return rank < 2
+        })
+      const ancestors = new Set([fork.headTargetId, ...shown.map((l) => l.fromTargetId)])
+      // Relatives: where else those ancestors could have flown — a parent's other successors (siblings), a grandparent's
+      // (uncles) and, one step on, an uncle's (cousins). Three per node and nothing further: no relative's own ancestry
+      // or later descendants, only what the selected target itself could have been and where else that could have gone.
+      const relatives = fork.links.filter((l) => !l.ancestral && located(l) && l.pathProbability >= 0.02).sort((x, y) => y.pathProbability - x.pathProbability)
+      const perNode = new Map<number, number>()
+      const seen = new Set(shown.map((l) => `${l.fromTargetId}>${l.toTargetId}`))
+      const drawn = new Set(ancestors)
+      const hang = (offAncestors: boolean) => {
+        for (const l of relatives) {
+          const key = `${l.fromTargetId}>${l.toTargetId}`
+          if (seen.has(key) || !drawn.has(l.fromTargetId) || ancestors.has(l.fromTargetId) !== offAncestors) continue
+          const rank = perNode.get(l.fromTargetId) ?? 0
+          if (rank >= 3) continue
+          perNode.set(l.fromTargetId, rank + 1)
+          seen.add(key)
+          shown.push(l)
+          drawn.add(l.toTargetId)
+        }
+      }
+      hang(true) // siblings and uncles, off the ancestors
+      hang(false) // cousins, off the uncles
+      // The best path through each node: its opacity and the percentage in its label.
+      const best = new Map<number, number>()
+      for (const l of shown) {
+        const node = l.ancestral ? l.fromTargetId : l.toTargetId
+        best.set(node, Math.max(best.get(node) ?? 0, l.pathProbability))
+      }
+      // Legs: the more probable it is that the object reported at A is the one reported at B, the thicker and the more
+      // opaque the leg (the link's own probability; the path product only goes into the labels).
+      const sl = opts.selectedLink
+      shown.forEach((l, i) => {
+        const p = clamp(l.probability)
+        predecessors.push({
+          type: 'Feature',
+          id: t.id * 1000 + i,
+          geometry: { type: 'LineString', coordinates: [pointOf(l.fromTargetId)!, pointOf(l.toTargetId)!] },
+          properties: {
+            id: t.id,
+            mode: props.mode,
+            vector: selectedColor,
+            label: `${Math.round(l.probability * 100)}%`,
+            opacity: 0.15 + 0.85 * p,
+            approach: false,
+            probability: p,
+            hasDirection: false,
+            rotation: 0,
+            size: 0,
+            generation: l.generation,
+            from: l.fromTargetId,
+            to: l.toTargetId,
+            linkProbability: l.probability,
+            pathProbability: l.pathProbability,
+            linkKind: l.kind,
+            selectedLink: !!sl && sl.fromTargetId === l.fromTargetId && sl.toTargetId === l.toTargetId,
+          },
+        })
+      })
+      // Every node a leg touches is drawn as the target it is — its class glyph turned by its course, a dot without
+      // one — as big and as opaque as the best path through it, so no leg ends in empty ground.
+      let k = 0
+      for (const id of drawn) {
+        const n = byId.get(id)
+        if (id === fork.headTargetId || !n?.point) continue
+        const time = new Date(n.at).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' })
+        const p = clamp(best.get(id) ?? 0)
+        predecessors.push({
+          type: 'Feature',
+          id: t.id * 1000 + 500 + k++,
+          geometry: n.point,
+          properties: {
+            id: t.id,
+            mode: props.mode,
+            vector: selectedColor,
+            label: `${n.approach ? '→ ' : ''}${n.placeName ?? ''} ${time} · ${Math.round(p * 100)}%`.trim(),
+            opacity: 0.3 + 0.7 * p,
+            approach: n.approach,
+            probability: p,
+            hasDirection: n.directionDeg != null,
+            rotation: n.directionDeg ?? 0,
+            size: 0.36 + 0.24 * p,
+            generation: n.generation,
+          },
+        })
+      }
+    }
     // Crumbs: the earlier reported positions, each with its time, linked by a dotted line up to the marker.
-    // Shown for the selected target, or for every target when the viewer asks for it.
-    if ((selected || filters.crumbs) && loc?.point && t.fixes.length >= 2) {
+    // Only the selected target has them (when the fork is not available); the rest of the map shows forecasts alone.
+    if (!fork && selected && loc?.point && t.fixes.length >= 2) {
       const previous = t.fixes.slice(0, -1)
       const chain: Position[] = [...previous.map((f) => f.point.coordinates), loc.point.coordinates]
+      // Each crumb carries the probability of the link that leads from it to the next position: the crumb and the
+      // dotted leg after it are as opaque as that probability, and the label says it in percent.
       previous.forEach((f, i) => {
-        const rank = previous.length - i // 1 = the most recent crumb
         const time = new Date(f.at).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' })
+        const p = Math.max(0.05, Math.min(1, f.probability))
         fixes.push({
           type: 'Feature',
           id: t.id * 10 + i,
           geometry: f.point,
-          properties: { id: t.id, mode: props.mode, vector: props.vector, label: `${f.approach ? '→ ' : ''}${f.placeName ?? ''} ${time}`.trim(), opacity: Math.max(0.35, 0.85 - 0.2 * (rank - 1)), approach: f.approach, selected },
+          properties: { id: t.id, mode: props.mode, vector: selectedColor, label: `${f.approach ? '→ ' : ''}${f.placeName ?? ''} ${time} · ${Math.round(p * 100)}%`.trim(), opacity: 0.3 + 0.7 * p, approach: f.approach, probability: p, hasDirection: false, rotation: 0, size: 0.22 + 0.2 * p },
         })
+        fixes.push({ type: 'Feature', id: t.id * 10 + 5 + i, geometry: { type: 'LineString', coordinates: [chain[i], chain[i + 1]] }, properties: { id: t.id, mode: props.mode, vector: selectedColor, label: '', opacity: 0.2 + 0.8 * p, approach: false, probability: p, hasDirection: false, rotation: 0, size: 0 } })
       })
-      fixes.push({ type: 'Feature', id: t.id, geometry: { type: 'LineString', coordinates: chain }, properties: { id: t.id, mode: props.mode, vector: props.vector, label: '', opacity: 0.7, approach: false, selected } })
     }
   }
   return {
@@ -196,7 +324,44 @@ export function buildTrackLayers(tracks: TrackDto[], now: Date, regionsById: Map
     fixes: { type: 'FeatureCollection', features: fixes },
     forecasts: { type: 'FeatureCollection', features: forecasts },
     areas: { type: 'FeatureCollection', features: areas },
+    predecessors: { type: 'FeatureCollection', features: predecessors },
   }
+}
+
+/**
+ * Replay (timelapse) layers: only the markers, at their reconstructed positions, the nose along the movement. No
+ * vectors, crumbs, areas, labels or badges — the picture is the movement itself, as in a time-lapse of the night.
+ */
+export function buildReplayLayers(positions: ReplayPosition[], palette: MapPalette, selectedId: number | null | undefined): TrackLayers {
+  const empty = <G extends Geometry, P>(): FeatureCollection<G, P> => ({ type: 'FeatureCollection', features: [] })
+  const points: Feature<Point, TrackProps>[] = positions.map((p) => {
+    const mode = p.type.displayMode
+    const selected = selectedId === p.id
+    return {
+      type: 'Feature',
+      id: p.id,
+      geometry: { type: 'Point', coordinates: [p.lon, p.lat] },
+      properties: {
+        id: p.id,
+        label: '',
+        mode,
+        color: selected ? (palette.selected[mode] ?? palette.selected.uav) : (palette.marker[mode] ?? palette.marker.uav),
+        vector: palette.vectorMuted,
+        opacity: p.opacity,
+        rotation: Number.isFinite(p.rotation) ? p.rotation : 0,
+        hasDirection: Number.isFinite(p.rotation),
+        status: 'Active',
+        kind: p.approach ? 'DirectionOnly' : 'Point',
+        approx: p.approach,
+        ageMin: 0,
+        sources: 0,
+        count: 0,
+        hazard: '',
+        selected,
+      },
+    }
+  })
+  return { points: { type: 'FeatureCollection', features: points }, fixes: empty(), forecasts: empty(), areas: empty(), predecessors: empty() }
 }
 
 /** Sector of a circle: where the object may be after the forecast period if it holds roughly the reported course. */
@@ -219,9 +384,9 @@ export interface AlertProps {
   startedAt: string
 }
 
-/** Alerts drawn as their oblast polygon; the rest (raion towns) become circles of the stated radius. */
-export function isPolygonAlert(a: AlertDto, regionsById: Map<number, RegionDto>): boolean {
-  return regionsById.has(a.placeId)
+/** Alerts drawn as the polygon of their place (oblast, raion, hromada); the rest become circles of the stated radius. */
+export function isPolygonAlert(a: AlertDto, regionsById: Map<number, RegionDto>, extra: Record<number, Geometry> = {}): boolean {
+  return regionsById.has(a.placeId) || a.placeId in extra
 }
 
 function circle(center: Position, km: number, steps = 48): Polygon {
@@ -232,13 +397,15 @@ function circle(center: Position, km: number, steps = 48): Polygon {
   return { type: 'Polygon', coordinates: [ring] }
 }
 
-export function buildAlertLayer(alerts: AlertDto[], regionsById: Map<number, RegionDto>): FeatureCollection<Geometry, AlertProps> {
+export function buildAlertLayer(alerts: AlertDto[], regionsById: Map<number, RegionDto>, extra: Record<number, Geometry> = {}): FeatureCollection<Geometry, AlertProps> {
   const features: Feature<Geometry, AlertProps>[] = []
   for (const a of alerts) {
     const region = regionsById.get(a.placeId)
     const geometry: Geometry | null = region
       ? region.geometry
-      : a.location?.point
+      : extra[a.placeId]
+        ? extra[a.placeId]
+        : a.location?.point
         ? circle(a.location.point.coordinates, Math.max(a.location.accuracyKm ?? 0, 20))
         : null
     if (!geometry) continue

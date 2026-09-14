@@ -24,6 +24,7 @@ public static class DependencyInjection
         services.AddSingleton<PulujMetrics>();
         services.AddSingleton<IRawMessageQueue, RawMessageQueue>();
         services.AddSingleton<RawMessageIngestor>();
+        services.AddSingleton<ReprocessService>();
         services.AddSingleton<SettingsStore>();
         services.AddSingleton(TimeProvider.System);
 

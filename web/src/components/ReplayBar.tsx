@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api/client'
 import type { TimelineBucketDto } from '../api/types'
+import { replay } from '../replay/engine'
 import { useStore } from '../store/useStore'
 
 const PRESETS_H = [1, 3, 6, 12, 24]
@@ -11,8 +12,11 @@ const SPEEDS = [
   { label: '15 хв/с', value: 15 },
   { label: '60 хв/с', value: 60 },
 ]
-const TICK_MS = 500
 const STEP_MIN = 1
+/** The store's `at` (alerts snapshot, feed cutoff) follows the replay clock at most this often while playing. */
+const STORE_SYNC_MS = 1000
+/** The clock readout follows the replay clock at most this often. */
+const READOUT_MS = 100
 
 function fmtTime(d: Date) {
   return d.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' })
@@ -26,8 +30,10 @@ function toLocalInput(d: Date) {
 }
 
 /**
- * Replay mode (spec §20): a window of history, a scrubber over it and a transport. Every position asks the API for
- * the state at that instant; the feed shows what had been reported by then. Works on both map pages.
+ * Replay mode (spec §20): a window of history, a scrubber over it and a transport. The window's tracks with all their
+ * reported positions load once (`/api/replay`); the replay engine then runs the clock on animation frames and the map
+ * moves the markers between reports — a time-lapse, not a slideshow of snapshots. The store's `at` follows the clock
+ * once a second (alerts, feed cutoff). Works on both map pages.
  */
 export default function ReplayBar({ onClose }: { onClose: () => void }) {
   const at = useStore((s) => s.at)
@@ -39,55 +45,91 @@ export default function ReplayBar({ onClose }: { onClose: () => void }) {
   const [speed, setSpeed] = useState(5)
   const [playing, setPlaying] = useState(false)
   const [buckets, setBuckets] = useState<TimelineBucketDto[]>([])
-  const timer = useRef<number | null>(null)
+  const [windowLoaded, setWindowLoaded] = useState(false)
+  // The clock readout: the replay engine's instant, throttled; the store's `at` is behind it while playing.
+  const [readout, setReadout] = useState<number | null>(null)
 
   const totalMin = hours * 60
-  const cursor = at ?? to
+  const cursor = readout !== null ? new Date(readout) : (at ?? to)
   const posMin = Math.min(totalMin, Math.max(0, (cursor.getTime() - from.getTime()) / 60000))
   const isLiveEdge = to.getTime() >= Date.now() - 60_000
 
   const seek = useCallback(
     (d: Date) => {
       const clamped = new Date(Math.min(to.getTime(), Math.max(from.getTime(), d.getTime())))
+      replay.seek(clamped.getTime())
       setMode('history', clamped)
     },
     [from, to, setMode],
   )
 
-  // Entering replay freezes the map at the end of the window; the window's data (histogram + feed) loads once per range.
+  // Entering replay freezes the map at the end of the window; the window's data (tracks with their positions,
+  // histogram, feed) loads once per range.
   useEffect(() => {
     setPlaying(false)
+    replay.pause()
+    setWindowLoaded(false)
     const current = useStore.getState().at
     seek(current && current >= from && current <= to ? current : to)
+    let cancelled = false
+    api
+      .replay(from, to)
+      .then((d) => {
+        if (cancelled) return
+        replay.load(d)
+        setWindowLoaded(true)
+      })
+      .catch(() => {
+        if (!cancelled) useStore.getState().setError('Не вдалося завантажити вікно відтворення')
+      })
     const bucketMin = Math.max(1, Math.round(totalMin / 72))
     api.timeline(from, to, bucketMin).then(setBuckets).catch(() => setBuckets([]))
     api
       .targetsBetween(from, to)
       .then((list) => useStore.getState().setTargets(list))
       .catch(() => useStore.getState().setTargets([]))
+    return () => {
+      cancelled = true
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [from, to])
 
+  // Leaving replay stops the clock and drops the window's tracks.
+  useEffect(() => () => replay.clear(), [])
+
   useEffect(() => {
-    if (!playing) {
-      if (timer.current) window.clearInterval(timer.current)
-      timer.current = null
-      return
-    }
-    timer.current = window.setInterval(() => {
-      const current = useStore.getState().at ?? from
-      const next = new Date(current.getTime() + speed * (TICK_MS / 1000) * 60_000)
-      if (next >= to) {
-        setMode('history', to)
-        setPlaying(false)
-      } else {
-        setMode('history', next)
+    replay.speed = speed
+  }, [speed])
+
+  useEffect(() => {
+    if (playing) replay.play()
+    else replay.pause()
+  }, [playing])
+
+  // The engine's clock drives the readout (often) and the store's `at` (rarely); the end of the window stops playback.
+  useEffect(() => {
+    let lastStore = 0
+    let lastReadout = 0
+    const off = replay.subscribe((t) => {
+      const now = performance.now()
+      if (now - lastReadout >= READOUT_MS || !replay.playing) {
+        lastReadout = now
+        setReadout(t)
       }
-    }, TICK_MS)
+      if (replay.playing && now - lastStore >= STORE_SYNC_MS) {
+        lastStore = now
+        setMode('history', new Date(t))
+      }
+    })
+    const offEnd = replay.onEnd(() => {
+      setPlaying(false)
+      setMode('history', new Date(replay.t))
+    })
     return () => {
-      if (timer.current) window.clearInterval(timer.current)
+      off()
+      offEnd()
     }
-  }, [playing, speed, from, to, setMode])
+  }, [setMode])
 
   // Keyboard transport: space = play/pause, arrows = step, Home/End = edges. Ignored while typing in a field.
   useEffect(() => {
@@ -182,7 +224,7 @@ export default function ReplayBar({ onClose }: { onClose: () => void }) {
           <button className={btn} title="−1 хв (←, Shift: −10)" onClick={() => seek(new Date(cursor.getTime() - STEP_MIN * 60_000))}>
             ◀
           </button>
-          <button className={`${btn} min-w-24 bg-indigo-600 text-white hover:bg-indigo-700`} title="Пробіл" onClick={() => setPlaying((p) => !p)} disabled={posMin >= totalMin && !playing}>
+          <button className={`${btn} min-w-24 bg-indigo-600 text-white hover:bg-indigo-700`} title="Пробіл" onClick={() => setPlaying((p) => !p)} disabled={(posMin >= totalMin && !playing) || !windowLoaded}>
             {playing ? '⏸ пауза' : '▶ відтворити'}
           </button>
           <button className={btn} title="+1 хв (→, Shift: +10)" onClick={() => seek(new Date(cursor.getTime() + STEP_MIN * 60_000))}>
@@ -198,7 +240,7 @@ export default function ReplayBar({ onClose }: { onClose: () => void }) {
               </option>
             ))}
           </select>
-          {loading && <span className="ml-1 text-[11px] text-slate-400">…</span>}
+          {(loading || !windowLoaded) && <span className="ml-1 text-[11px] text-slate-400">…</span>}
         </span>
         <span className="w-24 text-right text-[11px] text-slate-500">
           {fmtTime(to)} {fmtDate(to)}

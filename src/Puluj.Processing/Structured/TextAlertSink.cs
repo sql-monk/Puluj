@@ -31,12 +31,16 @@ public sealed class TextAlertSink(TimeProvider clock, ILogger<TextAlertSink> log
             }
             if (o.EventType == EventType.AirRaidAlert)
             {
-                var key = KeyPrefix + placeId;
+                // One key per interval ("text:<place>:<start>"): the (source, key) pair is unique, and a place gets
+                // alerted again after an "відбій".
+                var prefix = KeyPrefix + placeId + ":";
+                var key = prefix + o.ObservedAt.ToUnixTimeSeconds();
                 var open = await db.AirAlerts
-                    .Where(a => a.SourceId == source.SourceId && a.SourceAlertId == key && a.EndedAt == null)
+                    .Where(a => a.SourceId == source.SourceId && a.SourceAlertId.StartsWith(prefix) && a.EndedAt == null)
                     .OrderByDescending(a => a.StartedAt)
                     .FirstOrDefaultAsync(ct);
-                if (open is not null && now - open.StartedAt > MaxAge)
+                // Event time, not the clock: a rebuild of old messages must see the same intervals as live processing did.
+                if (open is not null && o.ObservedAt - open.StartedAt > MaxAge)
                 {
                     open.EndedAt = o.ObservedAt;
                     open = null;

@@ -22,6 +22,11 @@ public static class CountExtractor
     public static (int? Count, bool Approximate) Extract(Segment segment, int targetTokenIndex)
     {
         var tokens = segment.Tokens;
+        // A target inherited from a header or the previous line carries that line's token index: nothing to read here.
+        if (targetTokenIndex > tokens.Count)
+        {
+            return (null, false);
+        }
         for (var i = Math.Max(0, targetTokenIndex - 3); i < targetTokenIndex; i++)
         {
             var text = tokens[i].Text;

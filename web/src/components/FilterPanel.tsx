@@ -70,29 +70,12 @@ export default function FilterPanel({ open, onClose, picking, onPickingChange, o
       </div>
 
       <div>
-        <div className="mb-1 flex items-baseline justify-between">
-          <span className="font-medium">Вектори руху</span>
-          <button
-            className="text-xs text-slate-500 underline"
-            onClick={() => {
-              const off = filters.crumbs || filters.forecast
-              setFilter('crumbs', !off)
-              setFilter('forecast', !off)
-            }}
-          >
-            {filters.crumbs || filters.forecast ? 'сховати всі' : 'показати всі'}
-          </button>
-        </div>
-        <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-sm">
-          <label className="flex items-center gap-2">
-            <input type="checkbox" checked={filters.crumbs} onChange={(e) => setFilter('crumbs', e.target.checked)} />
-            <span title="Де ціль була раніше, з часом. Для виділеної цілі показується завжди.">Сліди всіх цілей</span>
-          </label>
-          <label className="flex items-center gap-2">
-            <input type="checkbox" checked={filters.forecast} onChange={(e) => setFilter('forecast', e.target.checked)} />
-            Прогноз
-          </label>
-        </div>
+        <div className="mb-1 font-medium">Вектори руху</div>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={filters.forecast} onChange={(e) => setFilter('forecast', e.target.checked)} />
+          <span title="Короткий пунктир зі штрихованим сектором попереду кожної цілі з курсом">Прогноз курсу</span>
+        </label>
+        <div className="mt-1 text-[11px] text-slate-500">Сліди й ймовірні попередники показуються лише для виділеної цілі (клік по маркеру).</div>
         <label className="mt-2 flex items-center justify-between gap-2 text-sm" title="Скільки часу після останнього повідомлення ціль лишається на карті">
           <span>Час життя позначки</span>
           <select className="rounded border border-slate-300 bg-white px-1 py-0.5 text-sm dark:border-slate-600 dark:bg-slate-800" value={filters.lifetimeMinutes} onChange={(e) => setFilter('lifetimeMinutes', Number(e.target.value))}>

@@ -1,5 +1,5 @@
 import * as maplibregl from 'maplibre-gl'
-import type { GeoJSONSource } from 'maplibre-gl'
+import type { GeoJSONSource, MapLayerMouseEvent } from 'maplibre-gl'
 import type { FeatureCollection, Geometry } from 'geojson'
 import type { TrackLayers } from './geojson'
 import { DISPLAY_MODES, type MapPalette } from './palette'
@@ -22,6 +22,7 @@ export function setTrackData(map: maplibregl.Map, layers: TrackLayers) {
   setData(map, 'track-fixes', layers.fixes)
   setData(map, 'track-forecasts', layers.forecasts)
   setData(map, 'track-areas', layers.areas)
+  setData(map, 'track-predecessors', layers.predecessors)
 }
 
 /** Fill / outline colours for alert polygons: yellow level = target (drones), red or unknown level = full alert. */
@@ -42,17 +43,19 @@ export function addIcons(map: maplibregl.Map, p: MapPalette) {
   }
   for (const mode of DISPLAY_MODES) {
     const color = p.marker[mode]
-    const vector = p.vector[mode]
-    put(`arrow-${mode}`, drawIcon(color, 'arrow', p))
-    put(`dot-${mode}`, drawIcon(color, 'dot', p))
-    // Selected: the glyph inverts to the selection colour with a class-coloured edge. Neighbour: class colour, heavy edge.
-    put(`sel-arrow-${mode}`, drawIcon(p.selection, 'arrow', p, color))
-    put(`sel-dot-${mode}`, drawIcon(p.selection, 'dot', p, color))
-    put(`nb-arrow-${mode}`, drawIcon(color, 'arrow', p, p.selection))
-    put(`nb-dot-${mode}`, drawIcon(color, 'dot', p, p.selection))
-    put(`head-${mode}`, drawIcon(vector, 'head', p))
-    put(`hatch-${mode}`, drawHatch(vector))
+    const edge = p.markerEdge[mode]
+    const selected = p.selected[mode]
+    put(`arrow-${mode}`, drawIcon(color, 'arrow', p, edge))
+    put(`dot-${mode}`, drawIcon(color, 'dot', p, edge))
+    // Selected: the glyph flips to the class's opposite colour, edged in the class colour so the class stays readable.
+    put(`sel-arrow-${mode}`, drawIcon(selected, 'arrow', p, color))
+    put(`sel-dot-${mode}`, drawIcon(selected, 'dot', p, color))
+    // The selected target's forecast follows its selection colour; every other forecast is the theme's neutral grey.
+    put(`head-sel-${mode}`, drawIcon(selected, 'head', p))
+    put(`hatch-sel-${mode}`, drawHatch(selected))
   }
+  put('head-muted', drawIcon(p.vectorMuted, 'head', p))
+  put('hatch-muted', drawHatch(p.vectorMuted))
   // Badges are whole images (pill + number), not text: a symbol layer with text stalls the tile whenever the basemap's
   // glyph server is unreachable, and these must never take the markers down with them.
   for (let n = 1; n <= BADGE_MAX; n++) {
@@ -65,8 +68,8 @@ export function addIcons(map: maplibregl.Map, p: MapPalette) {
 /** Badge images exist for 1..BADGE_MAX-1 and "BADGE_MAX-1+". */
 const BADGE_MAX = 31
 
-/** Marker glyphs, all pointing "up" (north); the layer rotates them by the course. White halo + dark edge keeps them
- * readable on both basemaps and over alert fills. */
+/** Marker glyphs, all pointing "up" (north); the layer rotates them by the course. A light halo, then the class's own
+ * light outline around its dark fill, keeps them readable on both basemaps and over alert fills. */
 function drawIcon(color: string, shape: 'arrow' | 'dot' | 'head', p: MapPalette, edge?: string): ImageData {
   const size = 64
   const c = size / 2
@@ -105,13 +108,14 @@ function drawIcon(color: string, shape: 'arrow' | 'dot' | 'head', p: MapPalette,
     ctx.stroke()
     return ctx.getImageData(0, 0, size, size)
   }
+  // A wide light halo, then the class outline: a dark fill must still stand out on a red-level alert fill.
   path()
   ctx.strokeStyle = p.glyphHalo
-  ctx.lineWidth = 6
+  ctx.lineWidth = 8
   ctx.stroke()
   path()
   ctx.strokeStyle = edge ?? p.glyphEdge
-  ctx.lineWidth = edge ? 4 : 2.2
+  ctx.lineWidth = 4.5
   ctx.stroke()
   path()
   ctx.fillStyle = color
@@ -164,13 +168,15 @@ function drawPill(fill: string, stroke: string, text: string, label: string): Im
   return c.getImageData(0, 0, w, h)
 }
 
-export const TRACK_SOURCES = ['track-areas', 'track-fixes', 'track-forecasts', 'track-points', 'home'] as const
+export const TRACK_SOURCES = ['track-areas', 'track-fixes', 'track-predecessors', 'track-forecasts', 'track-points', 'home'] as const
 
 export function addTrackSources(map: maplibregl.Map, cluster = true) {
   const empty: FeatureCollection = { type: 'FeatureCollection', features: [] }
+  map.addSource('hover-region', { type: 'geojson', data: empty })
   map.addSource('selected-region', { type: 'geojson', data: empty })
   map.addSource('track-areas', { type: 'geojson', data: empty })
   map.addSource('track-fixes', { type: 'geojson', data: empty })
+  map.addSource('track-predecessors', { type: 'geojson', data: empty })
   map.addSource('track-forecasts', { type: 'geojson', data: empty })
   // Clustering only folds markers that practically coincide (two reports on one oblast centroid), never neighbours.
   map.addSource('track-points', cluster ? { type: 'geojson', data: empty, cluster: true, clusterRadius: 6, clusterMaxZoom: 10 } : { type: 'geojson', data: empty })
@@ -178,11 +184,26 @@ export function addTrackSources(map: maplibregl.Map, cluster = true) {
 }
 
 /** Every layer a click on a track can land on: marker, badges, crumbs, forecast line / cone / chevron. */
-export const TRACK_HIT_LAYERS = ['track-points', 'track-badge-sources', 'track-badge-count', 'track-fixes', 'track-forecasts', 'track-forecast-heads', 'track-cone']
+export const TRACK_HIT_LAYERS = ['track-points', 'track-badge-sources', 'track-badge-count', 'track-fixes', 'track-pred-nodes', 'track-forecasts', 'track-forecast-heads', 'track-cone', 'track-forecast-hit', 'track-fix-hit', 'track-pred-hit']
 
-/** Track layers shared by every map: last-known area, tail, forecast cone + line + chevron, rings, markers, badges, labels, home. */
+/** Track layers shared by every map: hovered / clicked region, last-known area, predecessors, crumbs, forecast cone + line +
+ * chevron, hazard rings, markers, badges, labels, home. */
 export function addTrackLayers(map: maplibregl.Map, p: MapPalette, opts: { labelMinZoom?: number; iconScale?: number } = {}) {
   const iconScale = opts.iconScale ?? 1
+  // Region under the cursor (raion / oblast / city district): a light tint and a firm outline in the border ink.
+  map.addLayer({
+    id: 'hover-region-fill',
+    type: 'fill',
+    source: 'hover-region',
+    paint: { 'fill-color': p.border, 'fill-opacity': 0.08 },
+  })
+  map.addLayer({
+    id: 'hover-region-line',
+    type: 'line',
+    source: 'hover-region',
+    layout: { 'line-join': 'round' },
+    paint: { 'line-color': p.border, 'line-width': 2, 'line-opacity': 0.85 },
+  })
   // Clicked region: bold outline above the fills, below the markers.
   map.addLayer({
     id: 'selected-region-line',
@@ -213,7 +234,7 @@ export function addTrackLayers(map: maplibregl.Map, p: MapPalette, opts: { label
     type: 'fill',
     source: 'track-forecasts',
     filter: ['==', ['geometry-type'], 'Polygon'],
-    paint: { 'fill-pattern': ['concat', 'hatch-', ['get', 'mode']], 'fill-opacity': ['case', ['get', 'selected'], 0.45, 0.25] },
+    paint: { 'fill-pattern': ['case', ['get', 'selected'], ['concat', 'hatch-sel-', ['get', 'mode']], 'hatch-muted'], 'fill-opacity': ['case', ['get', 'selected'], 0.55, 0.22] },
   })
   map.addLayer({
     id: 'track-cone-line',
@@ -221,18 +242,89 @@ export function addTrackLayers(map: maplibregl.Map, p: MapPalette, opts: { label
     source: 'track-forecasts',
     filter: ['==', ['geometry-type'], 'Polygon'],
     layout: { 'line-join': 'round' },
-    paint: { 'line-color': ['get', 'vector'], 'line-opacity': ['case', ['get', 'selected'], 0.8, 0.45], 'line-width': 0.6, 'line-dasharray': [1, 2] },
+    paint: { 'line-color': ['get', 'vector'], 'line-opacity': ['case', ['get', 'selected'], 0.9, 0.4], 'line-width': ['case', ['get', 'selected'], 1, 0.6], 'line-dasharray': [1, 2] },
   })
 
-  // Crumbs: earlier reported positions as small faded glyphs with "place time" labels, joined to the marker by a
-  // dotted line. Not a trajectory — a list of where the target was said to be, and when.
+  // Family of the selected target: its probable earlier reports (two generations) and where else those could have
+  // flown, in the target's selection colour. A leg is as thick as the link's own probability and as opaque as the
+  // path's; its label = the link's probability. Every leg ends on a node drawn as the target it is (class glyph, turned
+  // by its course), as big and opaque as the best path through it; the node label = that path.
+  // The clicked leg: a light solid band under it, so it stands out on any fill.
+  map.addLayer({
+    id: 'track-pred-link-halo',
+    type: 'line',
+    source: 'track-predecessors',
+    filter: ['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'selectedLink'], true]],
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': p.label, 'line-width': ['+', 6, ['*', 6, ['get', 'probability']]], 'line-opacity': 0.95 },
+  })
+  map.addLayer({
+    id: 'track-pred-links',
+    type: 'line',
+    source: 'track-predecessors',
+    filter: ['==', ['geometry-type'], 'LineString'],
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': ['get', 'vector'], 'line-opacity': ['get', 'opacity'], 'line-width': ['+', 0.5, ['*', 6, ['get', 'probability']]], 'line-dasharray': [0.1, 1.8] },
+  })
+  map.addLayer({
+    id: 'track-pred-hit',
+    type: 'line',
+    source: 'track-predecessors',
+    filter: ['==', ['geometry-type'], 'LineString'],
+    paint: { 'line-color': p.vectorMuted, 'line-opacity': 0, 'line-width': 14 },
+  })
+  map.addLayer({
+    id: 'track-pred-link-labels',
+    type: 'symbol',
+    source: 'track-predecessors',
+    filter: ['==', ['geometry-type'], 'LineString'],
+    layout: { 'symbol-placement': 'line-center', 'text-field': ['get', 'label'], 'text-font': TEXT_FONT, 'text-size': 9, 'text-offset': [0, -0.8], 'text-allow-overlap': true },
+    paint: { 'text-color': p.label, 'text-halo-color': p.labelHalo, 'text-halo-width': 1, 'text-opacity': ['max', 0.45, ['get', 'opacity']] },
+  })
+  map.addLayer({
+    id: 'track-pred-nodes',
+    type: 'symbol',
+    source: 'track-predecessors',
+    filter: ['==', ['geometry-type'], 'Point'],
+    layout: {
+      'icon-image': ['concat', 'sel-', ['case', ['get', 'hasDirection'], 'arrow-', 'dot-'], ['get', 'mode']],
+      'icon-size': ['*', iconScale, ['get', 'size']],
+      'icon-rotate': ['get', 'rotation'],
+      'icon-rotation-alignment': 'map',
+      'icon-allow-overlap': true,
+      'icon-ignore-placement': true,
+      'text-field': ['get', 'label'],
+      'text-font': TEXT_FONT,
+      'text-size': 10,
+      'text-offset': [0, 0.9],
+      'text-anchor': 'top',
+      'text-optional': true,
+    },
+    paint: { 'icon-opacity': ['get', 'opacity'], 'text-color': p.label, 'text-halo-color': p.labelHalo, 'text-halo-width': 1.1, 'text-opacity': ['get', 'opacity'] },
+  })
+
+  // Crumbs of the selected target (when it has no predecessor fork): earlier reported positions as small faded glyphs
+  // with "place time" labels, joined to the marker by a dotted line. Not a trajectory — a list of where the target
+  // was said to be, and when.
   map.addLayer({
     id: 'track-fix-links',
     type: 'line',
     source: 'track-fixes',
     filter: ['==', ['geometry-type'], 'LineString'],
     layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: { 'line-color': ['get', 'vector'], 'line-opacity': ['get', 'opacity'], 'line-width': 1.4, 'line-dasharray': [0.1, 2.2] },
+    paint: {
+      'line-color': ['get', 'vector'],
+      'line-opacity': ['get', 'opacity'],
+      'line-width': ['+', 0.6, ['*', 3.4, ['get', 'probability']]],
+      'line-dasharray': [0.1, 2],
+    },
+  })
+  map.addLayer({
+    id: 'track-fix-hit',
+    type: 'line',
+    source: 'track-fixes',
+    filter: ['==', ['geometry-type'], 'LineString'],
+    paint: { 'line-color': p.vectorMuted, 'line-opacity': 0, 'line-width': 14 },
   })
   map.addLayer({
     id: 'track-fixes',
@@ -240,8 +332,8 @@ export function addTrackLayers(map: maplibregl.Map, p: MapPalette, opts: { label
     source: 'track-fixes',
     filter: ['==', ['geometry-type'], 'Point'],
     layout: {
-      'icon-image': ['concat', 'dot-', ['get', 'mode']],
-      'icon-size': 0.34 * iconScale,
+      'icon-image': ['concat', 'sel-dot-', ['get', 'mode']],
+      'icon-size': ['*', iconScale, ['get', 'size']],
       'icon-allow-overlap': true,
       'icon-ignore-placement': true,
       'text-field': ['get', 'label'],
@@ -259,7 +351,14 @@ export function addTrackLayers(map: maplibregl.Map, p: MapPalette, opts: { label
     type: 'line',
     source: 'track-forecasts',
     filter: ['==', ['geometry-type'], 'LineString'],
-    paint: { 'line-color': ['get', 'vector'], 'line-opacity': ['max', 0.85, ['get', 'opacity']], 'line-width': ['case', ['get', 'selected'], 1.6, 0.9], 'line-dasharray': [2, 2.4] },
+    paint: { 'line-color': ['get', 'vector'], 'line-opacity': ['case', ['get', 'selected'], 1, ['max', 0.7, ['get', 'opacity']]], 'line-width': ['case', ['get', 'selected'], 2.4, 1], 'line-dasharray': [2, 2.2] },
+  })
+  map.addLayer({
+    id: 'track-forecast-hit',
+    type: 'line',
+    source: 'track-forecasts',
+    filter: ['==', ['geometry-type'], 'LineString'],
+    paint: { 'line-color': p.vectorMuted, 'line-opacity': 0, 'line-width': 14 },
   })
   map.addLayer({
     id: 'track-forecast-heads',
@@ -267,8 +366,8 @@ export function addTrackLayers(map: maplibregl.Map, p: MapPalette, opts: { label
     source: 'track-forecasts',
     filter: ['==', ['geometry-type'], 'Point'],
     layout: {
-      'icon-image': ['concat', 'head-', ['get', 'mode']],
-      'icon-size': 0.26 * iconScale,
+      'icon-image': ['case', ['get', 'selected'], ['concat', 'head-sel-', ['get', 'mode']], 'head-muted'],
+      'icon-size': ['case', ['get', 'selected'], 0.34 * iconScale, 0.26 * iconScale],
       'icon-rotate': ['get', 'rotation'],
       'icon-rotation-alignment': 'map',
       'icon-allow-overlap': true,
@@ -308,28 +407,15 @@ export function addTrackLayers(map: maplibregl.Map, p: MapPalette, opts: { label
       'circle-stroke-opacity': 0.95,
     },
   })
-  // Position marker with direction arrow (rotated) or a plain circle when direction is unknown.
-  map.addLayer({
-    id: 'track-points-halo',
-    type: 'circle',
-    source: 'track-points',
-    filter: ['!', ['has', 'point_count']],
-    paint: {
-      'circle-color': ['case', ['get', 'selected'], p.selection, ['get', 'color']],
-      'circle-opacity': ['*', ['case', ['get', 'selected'], 0.3, ['get', 'approx'], 0.12, 0.25], ['get', 'opacity']],
-      'circle-radius': ['case', ['==', ['get', 'status'], 'Active'], 15 * iconScale, 9 * iconScale],
-      'circle-stroke-color': p.selection,
-      'circle-stroke-width': ['case', ['get', 'selected'], 2.5, ['get', 'neighbor'], 1.8, 0],
-      'circle-stroke-opacity': 0.9,
-    },
-  })
+  // Position marker with direction arrow (rotated) or a plain circle when direction is unknown. Selection is said by
+  // the glyph colour alone (sel-* images): no rings or discs under the marker.
   map.addLayer({
     id: 'track-points',
     type: 'symbol',
     source: 'track-points',
     filter: ['!', ['has', 'point_count']],
     layout: {
-      'icon-image': ['concat', ['case', ['get', 'selected'], 'sel-', ['get', 'neighbor'], 'nb-', ''], ['case', ['get', 'hasDirection'], 'arrow-', 'dot-'], ['get', 'mode']],
+      'icon-image': ['concat', ['case', ['get', 'selected'], 'sel-', ''], ['case', ['get', 'hasDirection'], 'arrow-', 'dot-'], ['get', 'mode']],
       'icon-size': ['case', ['get', 'selected'], 0.8 * iconScale, 0.62 * iconScale],
       'icon-rotate': ['get', 'rotation'],
       'icon-rotation-alignment': 'map',
@@ -376,16 +462,78 @@ export function addTrackLayers(map: maplibregl.Map, p: MapPalette, opts: { label
   })
 }
 
-/** The id of the track under a click: its marker, badge, tail or forecast. The dashed last-known area is not a
- * target: a click on empty ground inside an oblast must select the oblast, even when a track is drawn as that oblast. */
-export function trackAt(map: maplibregl.Map, point: maplibregl.Point): number | null {
-  const hit = map.queryRenderedFeatures(point, { layers: TRACK_HIT_LAYERS })[0]?.properties?.id
-  return hit === undefined ? null : Number(hit)
+/** What a click on a track landed on: the track, and the family leg when it hit one. */
+export interface TrackHit {
+  trackId: number
+  link?: { fromTargetId: number; toTargetId: number; probability: number; pathProbability: number; kind: string }
+}
+
+/** The track under a click: its marker, badge, crumb, forecast or a family leg (top-most first, so a marker over a
+ * leg wins). The dashed last-known area is not a target: a click on empty ground inside an oblast must select the
+ * oblast, even when a track is drawn as that oblast. */
+export function hitAt(map: maplibregl.Map, point: maplibregl.Point): TrackHit | null {
+  const f = map.queryRenderedFeatures(point, { layers: TRACK_HIT_LAYERS })[0]
+  const props = f?.properties
+  if (!f || !props || props.id === undefined) return null
+  const trackId = Number(props.id)
+  if (f.layer.id === 'track-pred-hit' && props.from !== undefined && props.to !== undefined) {
+    return { trackId, link: { fromTargetId: Number(props.from), toTargetId: Number(props.to), probability: Number(props.linkProbability), pathProbability: Number(props.pathProbability), kind: String(props.linkKind ?? '') } }
+  }
+  return { trackId }
 }
 
 export function pointerCursor(map: maplibregl.Map, layers: string[]) {
   for (const layer of layers) {
     map.on('mouseenter', layer, () => (map.getCanvas().style.cursor = 'pointer'))
     map.on('mouseleave', layer, () => (map.getCanvas().style.cursor = ''))
+  }
+}
+
+/** A polygon region the cursor can rest on: what to outline and what to say in the tooltip. */
+export interface HoverRegion {
+  id: number
+  geometry: Geometry
+  label: string
+}
+
+/**
+ * Region-under-cursor: outlines the polygon through the `hover-region` source and moves a tooltip next to the pointer.
+ * `resolve` maps the rendered features under the cursor (queried on `hitLayers`, top-most first) to a region, or null.
+ * Returns the teardown.
+ */
+export function regionHover(map: maplibregl.Map, tip: HTMLElement, hitLayers: string[], resolve: (hits: maplibregl.MapGeoJSONFeature[]) => HoverRegion | null): () => void {
+  let current: number | null = null
+  const clear = () => {
+    tip.hidden = true
+    if (current === null) return
+    current = null
+    if (map.getSource('hover-region')) setData(map, 'hover-region', { type: 'FeatureCollection', features: [] })
+  }
+  const move = (e: MapLayerMouseEvent) => {
+    // Layers are missing while a new style loads; the tooltip must not linger with a stale name then.
+    if (!map.getSource('hover-region') || hitLayers.some((l) => !map.getLayer(l))) return clear()
+    const region = resolve(map.queryRenderedFeatures(e.point, { layers: hitLayers }))
+    if (!region) return clear()
+    if (region.id !== current) {
+      current = region.id
+      tip.textContent = region.label
+      setData(map, 'hover-region', { type: 'FeatureCollection', features: [{ type: 'Feature', geometry: region.geometry, properties: {} }] })
+    }
+    // Next to the pointer, flipped to the other side near the right / bottom edge of the map.
+    const box = map.getContainer()
+    const gap = 14
+    tip.hidden = false
+    const w = tip.offsetWidth
+    const h = tip.offsetHeight
+    tip.style.left = `${e.point.x + gap + w > box.clientWidth - 8 ? e.point.x - gap - w : e.point.x + gap}px`
+    tip.style.top = `${e.point.y + gap + h > box.clientHeight - 8 ? e.point.y - gap - h : e.point.y + gap}px`
+  }
+  map.on('mousemove', move)
+  map.on('mouseout', clear)
+  map.on('dragstart', clear)
+  return () => {
+    map.off('mousemove', move)
+    map.off('mouseout', clear)
+    map.off('dragstart', clear)
   }
 }

@@ -1,3 +1,33 @@
+# One container per service. The Worker image is built once and started with different Worker__Roles
+# (migrate | telegram | alerts | processing); the containers talk to each other only through PostgreSQL
+# (raw messages + NOTIFY), so any of them can be restarted, scaled down or moved independently.
+#
+#   postgis ─┬─ migrate (one-shot: migrations + seed) ─┬─ collector-telegram ─┐
+#            │                                          ├─ collector-alerts   ─┼─ raw_messages → processor
+#            │                                          ├─ processor                        (NOTIFY wakes it)
+#            │                                          ├─ api    (public map, read-only role)
+#            │                                          └─ admin  (settings, status, logs)
+
+name: puluj
+
+x-worker: &worker
+  image: puluj-worker
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile.worker
+  env_file: .env  # deploy/.env: compose reads it for ${…} substitution and passes it to the containers
+  environment: &worker-env
+    ConnectionStrings__Puluj: "Host=postgis;Port=5432;Database=puluj;Username=puluj;Password=${POSTGRES_PASSWORD:-puluj}"
+    OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+  volumes:
+    - logs:/app/logs
+  depends_on:
+    postgis:
+      condition: service_healthy
+    migrate:
+      condition: service_completed_successfully
+  restart: unless-stopped
+
 services:
   postgis:
     image: postgis/postgis:17-3.5
@@ -15,36 +45,96 @@ services:
       timeout: 5s
       retries: 20
 
-  worker:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile.worker
-    env_file: ../.env
+  # Applies migrations (including the puluj_reader / puluj_admin roles) and the seed data, then exits.
+  # Every other service waits for it, so a schema change is applied exactly once before anything starts.
+  migrate:
+    <<: *worker
     environment:
-      ConnectionStrings__Puluj: "Host=postgis;Port=5432;Database=puluj;Username=puluj;Password=${POSTGRES_PASSWORD:-puluj}"
-      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
-    volumes:
-      - tgsession:/app/session
+      <<: *worker-env
+      Worker__Name: migrate
+      Worker__Roles: migrate
+      Serilog__WriteTo__1__Args__path: /app/logs/worker-migrate-.log
     depends_on:
       postgis:
         condition: service_healthy
-    restart: unless-stopped
+    restart: "no"
 
+  # Telegram MTProto collector: the only container that needs the session file and the my.telegram.org credentials.
+  collector-telegram:
+    <<: *worker
+    environment:
+      <<: *worker-env
+      Worker__Name: collector-telegram
+      Worker__Roles: telegram
+      Serilog__WriteTo__1__Args__path: /app/logs/worker-collector-telegram-.log
+    volumes:
+      - tgsession:/app/session
+      - logs:/app/logs
+
+  # alerts.in.ua poller.
+  collector-alerts:
+    <<: *worker
+    environment:
+      <<: *worker-env
+      Worker__Name: collector-alerts
+      Worker__Roles: alerts
+      Serilog__WriteTo__1__Args__path: /app/logs/worker-collector-alerts-.log
+
+  # Parsing, correlation, track watchdog (and the LLM fallback): the single consumer of raw_messages.
+  # Exactly one instance — the sweep and the correlation assume a single processor.
+  processor:
+    <<: *worker
+    environment:
+      <<: *worker-env
+      Worker__Name: processor
+      Worker__Roles: processing
+      Serilog__WriteTo__1__Args__path: /app/logs/worker-processor-.log
+
+  # Public map: read-only database role (created by the migrations; change the password with ALTER ROLE).
   api:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.api
     environment:
-      ConnectionStrings__Puluj: "Host=postgis;Port=5432;Database=puluj;Username=puluj;Password=${POSTGRES_PASSWORD:-puluj}"
+      ConnectionStrings__Puluj: "Host=postgis;Port=5432;Database=puluj;Username=puluj_reader;Password=${PULUJ_READER_PASSWORD:-puluj_reader}"
       ASPNETCORE_URLS: http://+:8080
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
     ports:
       - "8080:8080"
+    volumes:
+      - logs:/app/logs
     depends_on:
       postgis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Admin panel: settings, status, statistics and logs of every service; read-write role, own port. Keep it off the
+  # public internet (or set Admin__Token).
+  admin:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.admin
+    environment:
+      ConnectionStrings__Puluj: "Host=postgis;Port=5432;Database=puluj;Username=puluj_admin;Password=${PULUJ_ADMIN_PASSWORD:-puluj_admin}"
+      ASPNETCORE_URLS: http://+:8081
+      Admin__ApiUrl: http://api:8080
+      Admin__Token: ${ADMIN_TOKEN:-}
+      Logs__Directory: /app/logs
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+    ports:
+      - "8081:8081"
+    volumes:
+      - logs:/app/logs
+    depends_on:
+      postgis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
 
 volumes:
   pgdata:
   tgsession:
+  logs:

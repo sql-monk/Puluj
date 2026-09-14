@@ -94,6 +94,7 @@ export default function TrackDetailsDrawer({ onClose }: Props) {
             </div>
             <div>Напрямок: {directionText(track.direction)}</div>
             {track.fixes.length >= 2 && <div>Був: {fixChain(track)}</div>}
+            <PredecessorList />
             <div>Впевненість треку: {confidenceLabel[track.trackConfidence]} · {track.targetCount} повід. · {Math.max(track.distinctSourceCount, track.sourceIds.length)} джерел</div>
             {track.objectCount && track.objectCount > 1 && <div>Цілей у групі: {track.objectCount}</div>}
             <div>ETA до вас: {etaText(eta)}</div>
@@ -141,8 +142,13 @@ function TargetItem({ o }: { o: TargetDto }) {
       {o.links && o.links.length > 0 && (
         <div className="mb-1 flex flex-wrap gap-1 text-[11px]">
           {o.links.map((l) => (
-            <span key={`${l.direction}-${l.targetId}`} className="rounded bg-slate-100 px-1 text-slate-600 dark:bg-slate-800 dark:text-slate-300" title={`${linkLabel[l.kind] ?? l.kind}: ${Math.round(l.confidence * 100)}%`}>
-              {l.direction === 'from' ? '←' : '→'} #{l.targetId} {linkLabel[l.kind] ?? l.kind} {Math.round(l.confidence * 100)}%
+            <span
+              key={`${l.direction}-${l.targetId}`}
+              className="rounded bg-slate-100 px-1 text-slate-600 dark:bg-slate-800 dark:text-slate-300"
+              style={{ opacity: 0.45 + 0.55 * l.probability }}
+              title={`${linkLabel[l.kind] ?? l.kind}: ${Math.round(l.probability * 100)}%${l.distanceKm !== undefined ? ` · ${l.distanceKm} км за ${l.minutesApart} хв (треба ~${l.requiredMinutes})` : ''}${l.headingDiffDeg !== undefined ? ` · відхилення курсу ${l.headingDiffDeg}°` : ''}`}
+            >
+              {l.direction === 'from' ? '←' : '→'} #{l.targetId} {linkLabel[l.kind] ?? l.kind} {Math.round(l.probability * 100)}%
             </span>
           ))}
         </div>
@@ -161,5 +167,59 @@ function TargetItem({ o }: { o: TargetDto }) {
         )}
       </div>
     </li>
+  )
+}
+
+/** The probable predecessors of the selected track's newest report: the direct ones, then the ones behind each, and
+ * under each of them where else it could have flown (its other successors). */
+function PredecessorList() {
+  const fork = useStore((s) => s.predecessors)
+  if (!fork || fork.links.length === 0) return null
+  const byId = new Map(fork.targets.map((n) => [n.targetId, n]))
+  const time = (iso: string) => new Date(iso).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' })
+  const kindLabel: Record<string, string> = { Continuation: 'продовження', Split: 'розділення', Merge: 'злиття', Possible: 'можливо', Duplicate: 'дубль' }
+  const gen1 = fork.links.filter((l) => l.ancestral && l.toTargetId === fork.headTargetId).sort((a, b) => b.probability - a.probability)
+  const elsewhere = (from: number) => {
+    const others = fork.links.filter((x) => !x.ancestral && x.fromTargetId === from).sort((a, b) => b.probability - a.probability)
+    if (others.length === 0) return null
+    return (
+      <div className="ml-3 text-slate-500">
+        також могло летіти:{' '}
+        {others.map((s) => {
+          const m = byId.get(s.toTargetId)
+          return `${m?.approach ? '→ ' : ''}${m?.placeName ?? `#${s.toTargetId}`} ${m ? time(m.at) : ''} · ${Math.round(s.probability * 100)}%`
+        }).join(', ')}
+      </div>
+    )
+  }
+  return (
+    <div className="mt-1">
+      <div>Ймовірні попередники (до 2 поколінь) і куди ще вони могли летіти:</div>
+      <ul className="ml-2 space-y-0.5">
+        {gen1.map((l) => {
+          const n = byId.get(l.fromTargetId)
+          const gen2 = fork.links.filter((x) => x.ancestral && x.toTargetId === l.fromTargetId).sort((a, b) => b.probability - a.probability)
+          return (
+            <li key={l.fromTargetId} style={{ opacity: 0.55 + 0.45 * l.probability }} title={`${kindLabel[l.kind] ?? l.kind} · ціль #${l.fromTargetId}${n?.label ? ` · «${n.label}»` : ''}`}>
+              ← {n?.approach ? '→ ' : ''}{n?.placeName ?? `#${l.fromTargetId}`} {n ? time(n.at) : ''} · <b>{Math.round(l.probability * 100)}%</b>
+              {elsewhere(l.fromTargetId)}
+              {gen2.length > 0 && (
+                <ul className="ml-3">
+                  {gen2.map((g) => {
+                    const m = byId.get(g.fromTargetId)
+                    return (
+                      <li key={g.fromTargetId} style={{ opacity: 0.55 + 0.45 * g.pathProbability }} title={`${kindLabel[g.kind] ?? g.kind} · ціль #${g.fromTargetId}${m?.label ? ` · «${m.label}»` : ''} · шлях ${Math.round(g.pathProbability * 100)}%`}>
+                        ← {m?.approach ? '→ ' : ''}{m?.placeName ?? `#${g.fromTargetId}`} {m ? time(m.at) : ''} · {Math.round(g.probability * 100)}% <span className="text-slate-400">(шлях {Math.round(g.pathProbability * 100)}%)</span>
+                        {elsewhere(g.fromTargetId)}
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+    </div>
   )
 }

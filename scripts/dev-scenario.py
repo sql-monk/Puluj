@@ -1,6 +1,6 @@
-"""Injects a demo situation through POST /api/dev/ingest (Development only). Usage: python scripts/dev-scenario.py"""
+"""Injects a demo situation through POST /api/admin/dev/ingest of the admin service. Usage: python scripts/dev-scenario.py"""
 import json, urllib.request, datetime, sys
-base = sys.argv[1] if len(sys.argv) > 1 else 'http://localhost:5257'
+base = sys.argv[1] if len(sys.argv) > 1 else 'http://localhost:5258'
 def post(path, body):
     req = urllib.request.Request(base + path, data=json.dumps(body).encode('utf-8'), headers={'Content-Type': 'application/json'})
     with urllib.request.urlopen(req, timeout=20) as r:
@@ -24,4 +24,4 @@ steps = [
     {'sourceCode': 'tg_kpszsu', 'text': 'Пуск балістики з Брянської області! Загроза для Чернігівщини!', 'publishedAt': at(1)},
 ]
 for s in steps:
-    print(post('/api/dev/ingest', s))
+    print(post('/api/admin/dev/ingest', s))

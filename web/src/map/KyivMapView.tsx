@@ -4,12 +4,14 @@ import type { Feature, FeatureCollection, Geometry, Position } from 'geojson'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { RegionDto } from '../api/types'
 import type { MapPalette } from './palette'
+import LinkPopup from '../components/LinkPopup'
 import RegionPopup from '../components/RegionPopup'
 import TrackPopup from '../components/TrackPopup'
 import { effectiveNow, useStore, type Theme } from '../store/useStore'
 import { getPalette } from './palette'
-import { buildAlertLayer, buildTrackLayers, emptyCollection, isPolygonAlert, visibleTracks } from './geojson'
-import { ATTRIBUTION, STYLE_DARK, STYLE_LIGHT, TEXT_FONT, TRACK_HIT_LAYERS, addIcons, addTrackLayers, addTrackSources, alertPaint, pointerCursor, setData, setTrackData, trackAt } from './layers'
+import { replay } from '../replay/engine'
+import { buildAlertLayer, buildReplayLayers, buildTrackLayers, emptyCollection, isPolygonAlert, visibleTracks } from './geojson'
+import { ATTRIBUTION, STYLE_DARK, STYLE_LIGHT, TEXT_FONT, TRACK_HIT_LAYERS, addIcons, addTrackLayers, addTrackSources, alertPaint, pointerCursor, regionHover, hitAt, setData, setTrackData } from './layers'
 
 /** The city itself; the view opens on it with a margin of surroundings. */
 const KYIV_BOUNDS: [[number, number], [number, number]] = [
@@ -40,6 +42,8 @@ export default function KyivMapView({ dark, theme, onDetails }: Props) {
   const [mapInstance, setMapInstance] = useState<maplibregl.Map | null>(null)
   // Where the viewer clicked to select the current track: the popup opens there, not at the marker.
   const [clickAt, setClickAt] = useState<[number, number] | null>(null)
+  // Name of the city district under the cursor, moved by the hover handler directly (no render per mouse move).
+  const tip = useRef<HTMLDivElement>(null)
   const styleLoaded = useRef(false)
   const palette = getPalette(theme)
   const paletteRef = useRef(palette)
@@ -57,12 +61,22 @@ export default function KyivMapView({ dark, theme, onDetails }: Props) {
   const now = useStore((s) => s.now)
   const select = useStore((s) => s.select)
   const selectedTrackId = useStore((s) => s.selectedTrackId)
+  const selectedLink = useStore((s) => s.selectedLink)
+  const selectLink = useStore((s) => s.selectLink)
+  // Where the viewer clicked a family leg: the link window opens there.
+  const [linkClickAt, setLinkClickAt] = useState<[number, number] | null>(null)
   const selectedTrack = useStore((s) => (s.selectedTrackId ? s.tracks[s.selectedTrackId] : undefined))
+  const predecessors = useStore((s) => s.predecessors)
+  const loadPredecessors = useStore((s) => s.loadPredecessors)
+  const placeGeometries = useStore((s) => s.placeGeometries)
+  const ensurePlaceGeometry = useStore((s) => s.ensurePlaceGeometry)
   const selectedRegionId = useStore((s) => s.selectedRegionId)
   const selectRegion = useStore((s) => s.selectRegion)
   const clock = effectiveNow({ mode, at, now })
 
   const regionsById = useMemo(() => new Map<number, RegionDto>(regions.map((r) => [r.id, r])), [regions])
+  const regionsRef = useRef(regionsById)
+  regionsRef.current = regionsById
   const kyiv = useMemo(() => regions.find((r) => r.level === 'City' && r.countryCode === 'UA' && r.name === 'Київ'), [regions])
   const districts = useMemo(() => regions.filter((r) => r.level === 'District' && r.parentId === kyiv?.id), [regions, kyiv])
 
@@ -85,7 +99,14 @@ export default function KyivMapView({ dark, theme, onDetails }: Props) {
       styleLoaded.current = true
     })
     map.on('click', (e: MapLayerMouseEvent) => {
-      const trackId = trackAt(map, e.point)
+      const hit = hitAt(map, e.point)
+      // A leg of the selected target's family opens the link window; the selection itself stays.
+      if (hit?.link) {
+        selectLink({ trackId: hit.trackId, ...hit.link })
+        setLinkClickAt([e.lngLat.lng, e.lngLat.lat])
+        return
+      }
+      const trackId = hit?.trackId ?? null
       select(trackId)
       setClickAt(trackId === null ? null : [e.lngLat.lng, e.lngLat.lat])
       setRegionClickAt(trackId === null ? [e.lngLat.lng, e.lngLat.lat] : null)
@@ -100,10 +121,17 @@ export default function KyivMapView({ dark, theme, onDetails }: Props) {
       selectRegion(alert === undefined ? null : Number(alert))
     })
     pointerCursor(map, [...TRACK_HIT_LAYERS, 'districts-hit', 'alerts-fill'])
+    // Hover: the city district under the cursor (the hit fill covers the districts even under an alert fill).
+    const stopHover = regionHover(map, tip.current!, ['districts-hit'], (hits) => {
+      const id = Number(hits[0]?.properties?.id)
+      const district = regionsRef.current.get(id)
+      return district ? { id, geometry: district.geometry, label: district.name } : null
+    })
     map.on('error', (e) => console.error('[kyiv-map]', e.error?.message ?? e))
     mapRef.current = map
     setMapInstance(map)
     return () => {
+      stopHover()
       map.remove()
       mapRef.current = null
       setMapInstance(null)
@@ -127,18 +155,22 @@ export default function KyivMapView({ dark, theme, onDetails }: Props) {
     if (!map) return
     const apply = () => {
       if (!map.getSource('track-points')) return
-      const visible = visibleTracks(tracks, filters, clock)
-      const layers = buildTrackLayers(visible, clock, regionsById, filters, { home, selectedId: selectedTrackId, palette })
+      // Replay: the markers at their reconstructed positions for the replay clock; live: the snapshot's tracks.
+      const layers =
+        mode === 'history'
+          ? buildReplayLayers(replay.positions(replay.t || clock.getTime(), filters), palette, selectedTrackId)
+          : buildTrackLayers(visibleTracks(tracks, filters, clock), clock, regionsById, filters, { home, selectedId: selectedTrackId, palette, predecessors, selectedLink })
       // Keep only tracks that touch the page: their marker or the end of their forecast lies inside the data box.
       const near = new Set<number>()
       for (const f of layers.points.features) if (inBox(f.geometry.coordinates)) near.add(Number(f.id))
       for (const f of layers.forecasts.features) if (f.geometry.type === 'Point' && inBox(f.geometry.coordinates)) near.add(Number(f.id))
       const only = <G extends Geometry, P>(fc: FeatureCollection<G, P>): FeatureCollection<G, P> => ({ type: 'FeatureCollection', features: fc.features.filter((f) => near.has(Number((f.properties as { id: number }).id))) })
-      setTrackData(map, { points: only(layers.points), fixes: only(layers.fixes), forecasts: only(layers.forecasts), areas: only(layers.areas) })
+      setTrackData(map, { points: only(layers.points), fixes: only(layers.fixes), forecasts: only(layers.forecasts), areas: only(layers.areas), predecessors: only(layers.predecessors) })
 
       const alertList = filters.alerts ? Object.values(alerts) : []
-      const alerted = new Set(alertList.filter((a) => isPolygonAlert(a, regionsById)).map((a) => a.placeId))
-      setData(map, 'alerts', buildAlertLayer(alertList, regionsById))
+      for (const a of alertList) if (!regionsById.has(a.placeId) && !placeGeometries[a.placeId]) ensurePlaceGeometry(a.placeId)
+      const alerted = new Set(alertList.filter((a) => isPolygonAlert(a, regionsById, placeGeometries)).map((a) => a.placeId))
+      setData(map, 'alerts', buildAlertLayer(alertList, regionsById, placeGeometries))
       setData(map, 'kyiv', kyiv ? { type: 'FeatureCollection', features: [{ type: 'Feature', geometry: kyiv.geometry, properties: {} }] } : emptyCollection())
       const cityAlerted = kyiv ? alerted.has(kyiv.id) : false
       setData(map, 'districts', {
@@ -158,12 +190,30 @@ export default function KyivMapView({ dark, theme, onDetails }: Props) {
     }
     if (styleLoaded.current) apply()
     else map.once('style.load', apply)
-  }, [tracks, alerts, regions, regionsById, kyiv, districts, filters, home, clock, selectedRegionId, selectedTrackId, palette])
+  }, [mode, tracks, alerts, regions, regionsById, kyiv, districts, filters, home, clock, selectedRegionId, selectedTrackId, selectedLink, palette, predecessors, placeGeometries, ensurePlaceGeometry])
+
+  // Replay: every frame of the replay clock moves the markers, straight into the source, without a render.
+  useEffect(() => {
+    if (mode !== 'history') return
+    return replay.subscribe((t) => {
+      const map = mapRef.current
+      if (!map || !styleLoaded.current || !map.getSource('track-points')) return
+      const points = buildReplayLayers(replay.positions(t, filters), palette, selectedTrackId).points
+      setData(map, 'track-points', { type: 'FeatureCollection', features: points.features.filter((f) => inBox(f.geometry.coordinates)) })
+    })
+  }, [mode, filters, palette, selectedTrackId])
+
+  const selectedSeenAt = selectedTrack?.lastSeenAt
+  useEffect(() => {
+    loadPredecessors(selectedTrackId)
+  }, [selectedTrackId, selectedSeenAt, loadPredecessors])
 
   return (
     <div className="absolute inset-0">
       <div ref={container} className="h-full w-full" />
-      {mapInstance && selectedTrack && <TrackPopup map={mapInstance} track={selectedTrack} anchor={clickAt} onDetails={() => onDetails(selectedTrack.id)} onClose={() => select(null)} />}
+      <div ref={tip} hidden className="pointer-events-none absolute z-10 whitespace-nowrap rounded bg-white/95 px-2 py-1 text-xs shadow dark:bg-slate-900/95 dark:text-slate-100" />
+      {mapInstance && selectedTrack && !selectedLink && <TrackPopup map={mapInstance} track={selectedTrack} anchor={clickAt} onDetails={() => onDetails(selectedTrack.id)} onClose={() => select(null)} />}
+      {mapInstance && selectedLink && linkClickAt && <LinkPopup map={mapInstance} link={selectedLink} anchor={linkClickAt} onClose={() => selectLink(null)} />}
       {mapInstance && !selectedTrack && selectedRegionId !== null && regionClickAt && <RegionPopup map={mapInstance} placeId={selectedRegionId} anchor={regionClickAt} onClose={() => selectRegion(null)} />}
     </div>
   )

@@ -60,7 +60,8 @@ public sealed record ParsedFact
     public PlaceMention? Destination => Places.FirstOrDefault(p => p.Role == PlaceRole.Destination);
 }
 
-public sealed record ParseContext(int SourceId, string Language, int? HomeRegionPlaceId);
+/// <param name="PublishedAt">When the message was published; the LLM fallback skips messages older than Llm:MaxMessageAgeHours.</param>
+public sealed record ParseContext(int SourceId, string Language, int? HomeRegionPlaceId, DateTimeOffset? PublishedAt = null);
 
 public interface IParser
 {

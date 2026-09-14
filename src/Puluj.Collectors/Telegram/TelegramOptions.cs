@@ -17,4 +17,10 @@ public sealed class TelegramOptions
     public bool AutoJoin { get; set; } = true;
     /// <summary>How many recent messages per channel to backfill on first start.</summary>
     public int BackfillLimit { get; set; } = 30;
+    /// <summary>
+    /// When set, every channel's whole history from this instant on is loaded once (resumable, cursor in
+    /// collector_states), processing is held meanwhile, and when the last channel is done everything derived is
+    /// rebuilt from the raw messages in publication order (ReprocessService). Null = only the recent backfill.
+    /// </summary>
+    public DateTimeOffset? BackfillSince { get; set; }
 }

@@ -53,6 +53,8 @@ export interface FixDto {
   accuracyKm?: number
   /** The report only named a destination: the object was on its way to this place. */
   approach: boolean
+  /** That this earlier report is the same object as the next one in the chain (1 for the current position). */
+  probability: number
 }
 
 export interface TrackDto {
@@ -101,6 +103,26 @@ export interface SnapshotDto {
   alerts: AlertDto[]
 }
 
+/** One reported position of a track inside a replay window. */
+export interface ReplaySampleDto {
+  at: string
+  point: Point
+  directionDeg?: number
+  approach: boolean
+}
+export interface ReplayTrackDto {
+  id: number
+  type: TargetTypeDto
+  /** Oldest first. */
+  samples: ReplaySampleDto[]
+}
+/** A whole replay window in one payload: the client animates each track between its reports. */
+export interface ReplayDto {
+  from: string
+  to: string
+  tracks: ReplayTrackDto[]
+}
+
 export interface SourceDto {
   id: number
   code: string
@@ -119,12 +141,85 @@ export interface RawMessageDto {
   url?: string
 }
 
-/** A link from a target to another one: earlier ("from") or later ("to"), and how they relate. */
+/**
+ * A node of the selected target's family. generation = generations above the head (0 = the head's own level: siblings,
+ * cousins). ancestral = on the head's own ancestry (parent, grandparent); otherwise a relative: where an ancestor
+ * could have flown instead. The node is drawn as the target it is: its class glyph, turned by its course.
+ */
+export interface PredecessorDto {
+  targetId: number
+  generation: number
+  ancestral: boolean
+  at: string
+  placeName?: string
+  kind: LocationKind
+  point?: Point
+  accuracyKm?: number
+  approach: boolean
+  label?: string
+  displayMode: DisplayMode
+  typeLabel: string
+  directionDeg?: number
+}
+/** generation = the generation of `from` above the head; ancestral = a link on the head's own ancestry. */
+export interface PredecessorLinkDto {
+  fromTargetId: number
+  toTargetId: number
+  generation: number
+  ancestral: boolean
+  kind: 'Continuation' | 'Split' | 'Merge' | 'Possible' | 'Duplicate'
+  /** The link's own probability. */
+  probability: number
+  /** Product of the probabilities from the newest report down to this link. */
+  pathProbability: number
+}
+export interface PredecessorsDto {
+  trackId: number
+  headTargetId: number
+  targets: PredecessorDto[]
+  links: PredecessorLinkDto[]
+}
+
 export interface TargetLinkDto {
   targetId: number
   kind: 'Continuation' | 'Split' | 'Merge' | 'Possible' | 'Duplicate'
-  confidence: number
+  /** 0..1: that the two reports are the same object (links into one target sum to at most 1). */
+  probability: number
   direction: 'from' | 'to'
+  distanceKm?: number
+  minutesApart?: number
+  headingDiffDeg?: number
+  requiredMinutes?: number
+}
+
+/** Source rating report: per-day counters and the earned rating, who copies whom, and the groups that follow. */
+export interface SourceRatingDayDto {
+  day: string
+  targets: number
+  copies: number
+  copiedBy: number
+  avgLeadSeconds?: number
+  rating?: number
+}
+export interface SourceRatingDto {
+  id: number
+  name: string
+  trustLevel: number
+  rating?: number
+  group?: number
+  days: SourceRatingDayDto[]
+}
+export interface SourceCopyDto {
+  copierId: number
+  originalId: number
+  count: number
+  avgDelaySeconds: number
+}
+export interface SourceRatingReportDto {
+  days: string[]
+  sources: SourceRatingDto[]
+  copies: SourceCopyDto[]
+  groups: number[][]
 }
 
 export interface TargetDto {

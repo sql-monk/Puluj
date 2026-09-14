@@ -6,12 +6,14 @@ import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&ur
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { RegionDto } from '../api/types'
 import type { MapPalette } from './palette'
+import LinkPopup from '../components/LinkPopup'
 import RegionPopup from '../components/RegionPopup'
 import TrackPopup from '../components/TrackPopup'
 import { effectiveNow, useStore, type Theme } from '../store/useStore'
 import { getPalette } from './palette'
-import { buildAlertLayer, buildTrackLayers, emptyCollection, isPolygonAlert, visibleTracks } from './geojson'
-import { ATTRIBUTION, STYLE_DARK, STYLE_LIGHT, TRACK_HIT_LAYERS, addIcons, addTrackLayers, addTrackSources, alertPaint, pointerCursor, setData, setTrackData, trackAt } from './layers'
+import { replay } from '../replay/engine'
+import { buildAlertLayer, buildReplayLayers, buildTrackLayers, emptyCollection, visibleTracks } from './geojson'
+import { ATTRIBUTION, STYLE_DARK, STYLE_LIGHT, TRACK_HIT_LAYERS, addIcons, addTrackLayers, addTrackSources, alertPaint, pointerCursor, regionHover, hitAt, setData, setTrackData } from './layers'
 
 maplibregl.setWorkerUrl(maplibreWorkerUrl)
 
@@ -31,6 +33,8 @@ export default function MapView({ dark, theme, onPickHome, onDetails }: Props) {
   const [mapInstance, setMapInstance] = useState<maplibregl.Map | null>(null)
   // Where the viewer clicked to select the current track: the popup opens there, not at the marker.
   const [clickAt, setClickAt] = useState<[number, number] | null>(null)
+  // Name of the raion / oblast under the cursor, moved by the hover handler directly (no render per mouse move).
+  const tip = useRef<HTMLDivElement>(null)
   const styleLoaded = useRef(false)
   const pickRef = useRef(onPickHome)
   pickRef.current = onPickHome
@@ -50,12 +54,22 @@ export default function MapView({ dark, theme, onPickHome, onDetails }: Props) {
   const now = useStore((s) => s.now)
   const select = useStore((s) => s.select)
   const selectedTrackId = useStore((s) => s.selectedTrackId)
+  const selectedLink = useStore((s) => s.selectedLink)
+  const selectLink = useStore((s) => s.selectLink)
+  // Where the viewer clicked a family leg: the link window opens there.
+  const [linkClickAt, setLinkClickAt] = useState<[number, number] | null>(null)
   const selectedTrack = useStore((s) => (s.selectedTrackId ? s.tracks[s.selectedTrackId] : undefined))
+  const predecessors = useStore((s) => s.predecessors)
+  const loadPredecessors = useStore((s) => s.loadPredecessors)
+  const placeGeometries = useStore((s) => s.placeGeometries)
+  const ensurePlaceGeometry = useStore((s) => s.ensurePlaceGeometry)
   const selectedRegionId = useStore((s) => s.selectedRegionId)
   const selectRegion = useStore((s) => s.selectRegion)
   const clock = effectiveNow({ mode, at, now })
 
   const regionsById = useMemo(() => new Map<number, RegionDto>(regions.map((r) => [r.id, r])), [regions])
+  const regionsRef = useRef(regionsById)
+  regionsRef.current = regionsById
 
   useEffect(() => {
     if (!container.current || mapRef.current) return
@@ -78,22 +92,42 @@ export default function MapView({ dark, theme, onPickHome, onDetails }: Props) {
         pickRef.current(e.lngLat.lng, e.lngLat.lat)
         return
       }
-      const trackId = trackAt(map, e.point)
+      const hit = hitAt(map, e.point)
+      // A leg of the selected target's family opens the link window; the selection itself stays.
+      if (hit?.link) {
+        selectLink({ trackId: hit.trackId, ...hit.link })
+        setLinkClickAt([e.lngLat.lng, e.lngLat.lat])
+        return
+      }
+      const trackId = hit?.trackId ?? null
       select(trackId)
       setClickAt(trackId === null ? null : [e.lngLat.lng, e.lngLat.lat])
       setRegionClickAt(trackId === null ? [e.lngLat.lng, e.lngLat.lat] : null)
       if (trackId !== null) return
       // No marker under the cursor: (de)select the oblast for the feed filter and outline highlight.
-      const ob = map.queryRenderedFeatures(e.point, { layers: ['alerts-fill', 'oblasts-fill'] })[0]
+      // Raion first (the level alerts are published at), the oblast where no raion polygon is drawn.
+      const ob = map.queryRenderedFeatures(e.point, { layers: ['alerts-fill', 'raions-fill', 'oblasts-fill'] })[0]
       const regionId = ob?.layer.id === 'alerts-fill' ? ob.properties?.placeId : ob?.properties?.id
       selectRegion(regionId === undefined ? null : Number(regionId))
     })
-    pointerCursor(map, [...TRACK_HIT_LAYERS, 'oblasts-fill', 'alerts-fill'])
+    pointerCursor(map, [...TRACK_HIT_LAYERS, 'raions-fill', 'oblasts-fill', 'alerts-fill'])
+    // Hover: the raion under the cursor with its oblast; the oblast alone where no raion polygon is drawn. An alerted
+    // oblast is only hit through its alert fill (placeId = the oblast), which sits above the raion fill, so the raion
+    // is looked for among every hit before an oblast is accepted.
+    const stopHover = regionHover(map, tip.current!, ['raions-fill', 'oblasts-fill', 'alerts-fill'], (hits) => {
+      const byId = regionsRef.current
+      const regionsHit = hits.map((hit) => byId.get(Number(hit.layer.id === 'alerts-fill' ? hit.properties?.placeId : hit.properties?.id))).filter((r): r is RegionDto => !!r)
+      const region = regionsHit.find((r) => r.level === 'District') ?? regionsHit.find((r) => r.level === 'Region' || r.level === 'City')
+      if (!region) return null
+      const parent = region.parentId !== undefined ? byId.get(region.parentId) : undefined
+      return { id: region.id, geometry: region.geometry, label: parent ? `${region.name} · ${parent.name}` : region.name }
+    })
     map.on('error', (e) => console.error('[map]', e.error?.message ?? e))
     if (import.meta.env.DEV) Object.assign(window, { __map: map, __maplibre: maplibregl })
     mapRef.current = map
     setMapInstance(map)
     return () => {
+      stopHover()
       map.remove()
       mapRef.current = null
       setMapInstance(null)
@@ -124,12 +158,19 @@ export default function MapView({ dark, theme, onPickHome, onDetails }: Props) {
     if (!map) return
     const apply = () => {
       if (!map.getSource('track-points')) return
-      const visible = visibleTracks(tracks, filters, clock)
-      setTrackData(map, buildTrackLayers(visible, clock, regionsById, filters, { home, selectedId: selectedTrackId, palette }))
-      // An alerted oblast is drawn by the alert layer instead of the base fill, so the colours never blend.
+      // Replay: the markers at their reconstructed positions for the replay clock (the store's `at` lags it by up to
+      // a second while playing); live: the snapshot's tracks with their vectors.
+      if (mode === 'history') setTrackData(map, buildReplayLayers(replay.positions(replay.t || clock.getTime(), filters), palette, selectedTrackId))
+      else setTrackData(map, buildTrackLayers(visibleTracks(tracks, filters, clock), clock, regionsById, filters, { home, selectedId: selectedTrackId, palette, predecessors, selectedLink }))
+      // An alerted oblast is drawn by the alert layer instead of the base fill, so the colours never blend;
+      // raion / hromada alerts sit on top of the land fill. Hromada and city polygons are fetched on first need.
       const alertList = filters.alerts ? Object.values(alerts) : []
-      const alerted = new Set(alertList.filter((a) => isPolygonAlert(a, regionsById)).map((a) => a.placeId))
-      setData(map, 'alerts', buildAlertLayer(alertList, regionsById))
+      for (const a of alertList) if (!regionsById.has(a.placeId) && !placeGeometries[a.placeId]) ensurePlaceGeometry(a.placeId)
+      const alerted = new Set(alertList.filter((a) => regionsById.get(a.placeId)?.level === 'Region' || regionsById.get(a.placeId)?.level === 'City').map((a) => a.placeId))
+      setData(map, 'alerts', buildAlertLayer(alertList, regionsById, placeGeometries))
+      // Raions of the 2020 reform: thin outlines, and the click target for the region window.
+      const raions = regions.filter((r) => r.level === 'District' && r.countryCode === 'UA' && r.parentId !== undefined && regionsById.get(r.parentId)?.level === 'Region')
+      setData(map, 'raions', { type: 'FeatureCollection', features: raions.map((r) => ({ type: 'Feature', geometry: r.geometry, properties: { id: r.id, name: r.name } })) })
       const ukraine = regions.find((r) => r.level === 'Country' && r.countryCode === 'UA')
       setData(map, 'ukraine', ukraine ? { type: 'FeatureCollection', features: [{ type: 'Feature', geometry: ukraine.geometry, properties: {} }] } : emptyCollection())
       // Oblast polygons inside Ukraine (regions + Kyiv/Sevastopol city-regions): filled with our own land colour.
@@ -141,14 +182,32 @@ export default function MapView({ dark, theme, onPickHome, onDetails }: Props) {
     }
     if (styleLoaded.current) apply()
     else map.once('style.load', apply)
-  }, [tracks, alerts, regions, regionsById, filters, home, clock, selectedRegionId, selectedTrackId, palette])
+  }, [mode, tracks, alerts, regions, regionsById, filters, home, clock, selectedRegionId, selectedTrackId, selectedLink, palette, predecessors, placeGeometries, ensurePlaceGeometry])
+
+  // Replay: every frame of the replay clock moves the markers, straight into the source, without a render.
+  useEffect(() => {
+    if (mode !== 'history') return
+    return replay.subscribe((t) => {
+      const map = mapRef.current
+      if (!map || !styleLoaded.current || !map.getSource('track-points')) return
+      setData(map, 'track-points', buildReplayLayers(replay.positions(t, filters), palette, selectedTrackId).points)
+    })
+  }, [mode, filters, palette, selectedTrackId])
+
+  // The predecessor fork follows the selection and refreshes when the selected track gets a newer report.
+  const selectedSeenAt = selectedTrack?.lastSeenAt
+  useEffect(() => {
+    loadPredecessors(selectedTrackId)
+  }, [selectedTrackId, selectedSeenAt, loadPredecessors])
 
   // MapLibre's own (unlayered) CSS sets position on .maplibregl-map and would override Tailwind's layered
   // utilities, so the positioned wrapper is a separate element.
   return (
     <div className="absolute inset-0">
       <div ref={container} className="h-full w-full" />
-      {mapInstance && selectedTrack && <TrackPopup map={mapInstance} track={selectedTrack} anchor={clickAt} onDetails={() => onDetails(selectedTrack.id)} onClose={() => select(null)} />}
+      <div ref={tip} hidden className="pointer-events-none absolute z-10 whitespace-nowrap rounded bg-white/95 px-2 py-1 text-xs shadow dark:bg-slate-900/95 dark:text-slate-100" />
+      {mapInstance && selectedTrack && !selectedLink && <TrackPopup map={mapInstance} track={selectedTrack} anchor={clickAt} onDetails={() => onDetails(selectedTrack.id)} onClose={() => select(null)} />}
+      {mapInstance && selectedLink && linkClickAt && <LinkPopup map={mapInstance} link={selectedLink} anchor={linkClickAt} onClose={() => selectLink(null)} />}
       {mapInstance && !selectedTrack && selectedRegionId !== null && regionClickAt && <RegionPopup map={mapInstance} placeId={selectedRegionId} anchor={regionClickAt} onClose={() => selectRegion(null)} />}
     </div>
   )
@@ -158,6 +217,7 @@ function addLayers(map: maplibregl.Map, p: MapPalette) {
   const empty = emptyCollection()
   map.addSource('ukraine', { type: 'geojson', data: empty })
   map.addSource('oblasts', { type: 'geojson', data: empty })
+  map.addSource('raions', { type: 'geojson', data: empty })
   map.addSource('alerts', { type: 'geojson', data: empty })
   addTrackSources(map)
 
@@ -172,6 +232,14 @@ function addLayers(map: maplibregl.Map, p: MapPalette) {
     { id: 'oblasts-line', type: 'line', source: 'oblasts', paint: { 'line-color': p.oblastLine, 'line-width': 0.9, 'line-opacity': 0.6 } },
     firstSymbol,
   )
+  // Raions: an invisible fill for hit-testing and a hairline outline that gets a little firmer when zoomed in.
+  map.addLayer({ id: 'raions-fill', type: 'fill', source: 'raions', paint: { 'fill-color': p.land, 'fill-opacity': 0 } }, firstSymbol)
+  map.addLayer(
+    { id: 'raions-line', type: 'line', source: 'raions', paint: { 'line-color': p.oblastLine, 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.35, 8, 0.8], 'line-opacity': 0.5 } },
+    firstSymbol,
+  )
+  map.moveLayer('raions-fill', 'oblasts-line')
+  map.moveLayer('raions-line', 'oblasts-line')
   map.addLayer({ id: 'ukraine-halo', type: 'line', source: 'ukraine', paint: { 'line-color': p.borderHalo, 'line-width': 7, 'line-opacity': 0.9 } }, firstSymbol)
   map.addLayer(
     {

@@ -391,6 +391,10 @@ namespace Puluj.Infrastructure.Persistence.Migrations
                         .IsUnique()
                         .HasDatabaseName("ix_raw_messages_source_id_source_message_id");
 
+                    b.HasIndex(new[] { "PublishedAt" }, "ix_raw_messages_pending_published")
+                        .HasDatabaseName("ix_raw_messages_pending_published")
+                        .HasFilter("processing_status = 0");
+
                     b.ToTable("raw_messages", (string)null);
                 });
 
@@ -456,6 +460,72 @@ namespace Puluj.Infrastructure.Persistence.Migrations
                         .HasDatabaseName("ix_sources_code");
 
                     b.ToTable("sources", (string)null);
+                });
+
+            modelBuilder.Entity("Puluj.Domain.Entities.SourceCopy", b =>
+                {
+                    b.Property<int>("CopierSourceId")
+                        .HasColumnType("integer")
+                        .HasColumnName("copier_source_id");
+
+                    b.Property<int>("OriginalSourceId")
+                        .HasColumnType("integer")
+                        .HasColumnName("original_source_id");
+
+                    b.Property<DateOnly>("Day")
+                        .HasColumnType("date")
+                        .HasColumnName("day");
+
+                    b.Property<int>("Count")
+                        .HasColumnType("integer")
+                        .HasColumnName("count");
+
+                    b.Property<double>("DelaySecondsSum")
+                        .HasColumnType("double precision")
+                        .HasColumnName("delay_seconds_sum");
+
+                    b.HasKey("CopierSourceId", "OriginalSourceId", "Day")
+                        .HasName("pk_source_copies");
+
+                    b.HasIndex("Day")
+                        .HasDatabaseName("ix_source_copies_day");
+
+                    b.ToTable("source_copies", (string)null);
+                });
+
+            modelBuilder.Entity("Puluj.Domain.Entities.SourceDailyStat", b =>
+                {
+                    b.Property<int>("SourceId")
+                        .HasColumnType("integer")
+                        .HasColumnName("source_id");
+
+                    b.Property<DateOnly>("Day")
+                        .HasColumnType("date")
+                        .HasColumnName("day");
+
+                    b.Property<int>("CopiedBy")
+                        .HasColumnType("integer")
+                        .HasColumnName("copied_by");
+
+                    b.Property<int>("Copies")
+                        .HasColumnType("integer")
+                        .HasColumnName("copies");
+
+                    b.Property<double>("LeadSecondsSum")
+                        .HasColumnType("double precision")
+                        .HasColumnName("lead_seconds_sum");
+
+                    b.Property<int>("Targets")
+                        .HasColumnType("integer")
+                        .HasColumnName("targets");
+
+                    b.HasKey("SourceId", "Day")
+                        .HasName("pk_source_daily_stats");
+
+                    b.HasIndex("Day")
+                        .HasDatabaseName("ix_source_daily_stats_day");
+
+                    b.ToTable("source_daily_stats", (string)null);
                 });
 
             modelBuilder.Entity("Puluj.Domain.Entities.Target", b =>
@@ -621,14 +691,14 @@ namespace Puluj.Infrastructure.Persistence.Migrations
                     b.HasIndex("SourceId")
                         .HasDatabaseName("ix_targets_source_id");
 
-                    b.HasIndex("TargetCategoryId")
-                        .HasDatabaseName("ix_targets_target_category_id");
-
                     b.HasIndex("TargetFamilyId")
                         .HasDatabaseName("ix_targets_target_family_id");
 
                     b.HasIndex("TargetModelId")
                         .HasDatabaseName("ix_targets_target_model_id");
+
+                    b.HasIndex("TargetCategoryId", "ObservedAt")
+                        .HasDatabaseName("ix_targets_target_category_id_observed_at");
 
                     b.HasIndex("TargetClassId", "ObservedAt")
                         .HasDatabaseName("ix_targets_target_class_id_observed_at");
@@ -761,17 +831,33 @@ namespace Puluj.Infrastructure.Persistence.Migrations
                         .HasColumnType("bigint")
                         .HasColumnName("to_target_id");
 
-                    b.Property<double>("Confidence")
-                        .HasColumnType("double precision")
-                        .HasColumnName("confidence");
-
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
+                    b.Property<double?>("DistanceKm")
+                        .HasColumnType("double precision")
+                        .HasColumnName("distance_km");
+
+                    b.Property<double?>("HeadingDiffDeg")
+                        .HasColumnType("double precision")
+                        .HasColumnName("heading_diff_deg");
+
                     b.Property<int>("Kind")
                         .HasColumnType("integer")
                         .HasColumnName("kind");
+
+                    b.Property<double?>("MinutesApart")
+                        .HasColumnType("double precision")
+                        .HasColumnName("minutes_apart");
+
+                    b.Property<double>("Probability")
+                        .HasColumnType("double precision")
+                        .HasColumnName("probability");
+
+                    b.Property<double?>("RequiredMinutes")
+                        .HasColumnType("double precision")
+                        .HasColumnName("required_minutes");
 
                     b.HasKey("FromTargetId", "ToTargetId")
                         .HasName("pk_target_links");
@@ -1012,6 +1098,9 @@ namespace Puluj.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("LastLocationPlaceId")
                         .HasDatabaseName("ix_target_tracks_last_location_place_id");
+
+                    b.HasIndex("LastSeenAt")
+                        .HasDatabaseName("ix_target_tracks_last_seen_at");
 
                     b.HasIndex("TargetCategoryId")
                         .HasDatabaseName("ix_target_tracks_target_category_id");

@@ -23,8 +23,21 @@ public static class EndpointRouteBuilderExtensions
                 ? await snapshots.LiveAsync(activeOnly ?? true, ct)
                 : await snapshots.AtAsync(at.Value, activeOnly ?? true, ct));
 
+        // Replay window (spec §20): every track that was reported inside it, with all its reported positions, so the
+        // client can animate the movement between reports instead of asking for a snapshot per tick.
+        api.MapGet("/replay", async (DateTimeOffset from, DateTimeOffset to, SnapshotService snapshots, CancellationToken ct) =>
+            await snapshots.ReplayAsync(from, to, ct));
+
+        // The probable predecessors of the track's newest target (all of them, two generations back by default).
+        api.MapGet("/tracks/{id:long}/predecessors", async (long id, int? depth, SnapshotService snapshots, CancellationToken ct) =>
+            await snapshots.PredecessorsAsync(id, Math.Clamp(depth ?? 2, 1, 4), ct) is { } p ? Results.Ok(p) : Results.NotFound());
+
         api.MapGet("/tracks/{id:long}", async Task<Results<Ok<TrackDetailsDto>, NotFound>> (long id, SnapshotService snapshots, CancellationToken ct) =>
             await snapshots.TrackDetailsAsync(id, ct) is { } details ? TypedResults.Ok(details) : TypedResults.NotFound());
+
+        // One report with its message, source and kinematic links (the link window between two reports).
+        api.MapGet("/targets/{id:long}", async Task<Results<Ok<TargetDto>, NotFound>> (long id, SnapshotService snapshots, CancellationToken ct) =>
+            await snapshots.TargetAsync(id, ct) is { } o ? TypedResults.Ok(o) : TypedResults.NotFound());
 
         // Feed: newest targets for the side panel (default last 6 h). `until` bounds a replay window.
         api.MapGet("/targets", async (DateTimeOffset? since, DateTimeOffset? until, int? limit, SnapshotService snapshots, TimeProvider clock, CancellationToken ct) =>
@@ -72,8 +85,9 @@ public static class EndpointRouteBuilderExtensions
         {
             await using var db = await factory.CreateDbContextAsync(ct);
             var rows = await db.Places.AsNoTracking()
+                // Oblasts, city-regions, raions (COD-AB) and Kyiv's city districts; hromada polygons are fetched one by one when an alert needs them.
                 .Where(p => p.Level == PlaceLevel.Region || p.Level == PlaceLevel.NamedArea || p.Level == PlaceLevel.Country || (p.Level == PlaceLevel.City && p.ParentId == null)
-                    || (p.Level == PlaceLevel.District && p.Parent != null && p.Parent.Level == PlaceLevel.City && p.Parent.ParentId == null))
+                    || (p.Level == PlaceLevel.District && p.CountryCode == "UA"))
                 .Select(p => new RegionDto(p.PlaceId, p.Name, p.Level.ToString(), p.CountryCode, p.ParentId, p.Geometry))
                 .ToListAsync(ct);
             http.Response.Headers.CacheControl = "public, max-age=3600";
@@ -92,32 +106,6 @@ public static class EndpointRouteBuilderExtensions
             return Results.Ok(geometry);
         });
 
-        if (isDevelopment)
-        {
-            // Local testing without real sources: inject a message as if a collector had received it.
-            api.MapPost("/dev/ingest", async (IngestRequest req, ReferenceCache refs, RawMessageIngestor ingestor, TimeProvider clock, CancellationToken ct) =>
-            {
-                var source = refs.Sources.Values.FirstOrDefault(s => s.Code == req.SourceCode);
-                if (source is null)
-                {
-                    return Results.BadRequest(new { error = $"unknown source '{req.SourceCode}'" });
-                }
-                var result = await ingestor.IngestAsync(new IncomingMessage
-                {
-                    SourceId = source.SourceId,
-                    SourceMessageId = req.SourceMessageId ?? $"dev-{Guid.NewGuid():N}",
-                    PublishedAt = req.PublishedAt ?? clock.GetUtcNow(),
-                    RawText = string.IsNullOrWhiteSpace(req.Text) ? null : req.Text,
-                    RawPayload = req.Payload is { ValueKind: System.Text.Json.JsonValueKind.Object } p
-                        ? System.Text.Json.JsonDocument.Parse(p.GetRawText())
-                        : System.Text.Json.JsonDocument.Parse("{\"kind\":\"dev.ingest\"}"),
-                    Url = null,
-                }, source.Code, ct);
-                return Results.Ok(result);
-            });
-        }
-
-        app.MapAdminEndpoints();
         app.MapHub<MapHub>("/hubs/map");
         return app;
     }

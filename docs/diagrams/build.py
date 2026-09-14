@@ -90,9 +90,9 @@ def overview() -> None:
     d.box("wd", 300, 380, 260, 50, "TrackWatchdog / IndexProvider<br><font style='font-size:10px'>закриття треків за таймаутом; кеш таксономії та газетира</font>", color="worker")
     d.note(300, 440, 260, 60, "Один процес, кілька фонових служб. Обробка одного повідомлення — одна транзакція; після COMMIT публікується NOTIFY.")
 
-    d.box("db", 640, 120, 220, 300, "PostgreSQL + PostGIS<br><br>raw_messages<br>targets<br>target_tracks<br>target_track_revisions<br>air_alerts<br>places · таксономія · sources<br><br><font style='font-size:10px'>єдине джерело істини</font>", DB, "db")
+    d.box("db", 640, 120, 220, 330, "PostgreSQL + PostGIS<br><br>raw_messages<br>targets · target_links<br>target_tracks<br>air_alerts · app_settings<br>places · таксономія · sources<br><br><font style='font-size:10px'>єдине джерело істини<br>ролі: puluj (owner, Worker) · puluj_reader (Api) · puluj_admin (Admin)</font>", DB, "db")
 
-    d.group("gA", 920, 40, 240, 300, "Puluj.Api", "api")
+    d.group("gA", 920, 40, 240, 300, "Puluj.Api  :5257  (роль puluj_reader — лише читання)", "api")
     d.box("rest", 940, 80, 200, 50, "REST /api/*<br><font style='font-size:10px'>snapshot, tracks, timeline, places</font>", color="api")
     d.box("hub", 940, 150, 200, 50, "SignalR /hubs/map<br><font style='font-size:10px'>TrackUpserted, TrackClosed, AlertChanged</font>", color="api")
     d.box("lst", 940, 220, 200, 50, "LISTEN puluj_events<br><font style='font-size:10px'>по події дочитує сутність з БД</font>", color="api")
@@ -102,6 +102,13 @@ def overview() -> None:
     d.box("map", 1240, 80, 160, 60, "Карта (MapLibre)<br><font style='font-size:10px'>тривоги, район, шлях, прогноз</font>", color="web")
     d.box("eta", 1240, 160, 160, 60, "ETA / fade<br><font style='font-size:10px'>рахується локально; точка користувача не покидає браузер</font>", color="web")
     d.box("hist", 1240, 240, 160, 50, "Історія / деталі<br><font style='font-size:10px'>replay, джерела</font>", color="web")
+
+    d.group("gM", 920, 370, 240, 210, "Puluj.Admin  :5258  (роль puluj_admin)", "worker")
+    d.box("adm", 940, 410, 200, 50, "REST /api/admin/*<br><font style='font-size:10px'>settings, sources, rating, ops, logs</font>", color="worker")
+    d.box("ops", 940, 475, 200, 50, "Стан компонентів<br><font style='font-size:10px'>heartbeat Worker, /api/health Api, колектори, БД</font>", color="worker")
+    d.box("adms", 940, 535, 200, 35, "static: admin.html (збірка web/)", color="worker")
+    d.box("logs", 640, 480, 220, 60, "logs/ (спільна тека)<br><font style='font-size:10px'>worker-, api-, admin-&lt;день&gt;.log (Serilog)</font>", color="grey")
+    d.box("padm", 1240, 400, 160, 60, "Адмін-панель<br><font style='font-size:10px'>налаштування, статистика, логи</font>", color="web")
 
     d.edge("alerts", "col", exit=(1, 0.5), entry=(0, 0.3))
     d.edge("tg", "col", exit=(1, 0.5), entry=(0, 0.7))
@@ -117,6 +124,10 @@ def overview() -> None:
     d.edge("lst", "hub", exit=(0.5, 0), entry=(0.5, 1))
     d.edge("rest", "map", "JSON", exit=(1, 0.5), entry=(0, 0.5))
     d.edge("hub", "map", "WebSocket", exit=(1, 0.5), entry=(0, 0.9), dashed=True)
+    d.edge("db", "adm", "SQL (read/write app_settings, sources)", exit=(1, 0.95), entry=(0, 0.5))
+    d.edge("logs", "adm", "tail", exit=(1, 0.5), entry=(0, 0.9), dashed=True)
+    d.edge("adm", "padm", "JSON", exit=(1, 0.5), entry=(0, 0.5))
+    d.edge("ops", "rest", "GET /api/health", exit=(0.5, 0), entry=(0.5, 1), dashed=True)
     d.write()
 
 
@@ -180,15 +191,17 @@ def datamodel() -> None:
     table("tto", 680, 200, 220, "track_targets", ["target_track_id, target_id", "sequence", "association_confidence 0..1", "association_reason jsonb"], "db")
     table("trk", 980, 120, 240, "target_tracks", ["status, closed_reason", "category / class / family / model", "first_seen_at, last_seen_at, updated_at", "last_location*, track_geometry", "direction_*, object_count", "track_confidence, target_count", "distinct_source_count, last_source_id"], "db")
     table("rev", 980, 340, 240, "target_track_revisions", ["target_track_id, revision_at ★", "повна копія стану треку", "target_id (тригер)"], "db")
-    table("places", 340, 380, 260, "places (газетир)", ["external_key, name, name_variants[]", "level (Region…Village), parent_id", "geometry, centroid, radius_km"], "grey")
+    table("places", 340, 380, 260, "places (газетир)", ["external_key, name, name_variants[]", "level: Region · District (район) · Hromada", "· City…Village · NamedArea; parent_id", "geometry, centroid, radius_km"], "grey")
     table("tax", 680, 520, 220, "таксономія", ["target_categories → classes", "→ families → models", "metadata: speed, fade, window", "target_model_aliases (стеми)"], "grey")
     table("alerts", 40, 320, 220, "air_alerts", ["place_id, alert_type", "started_at, ended_at", "source_alert_id ★"], "db")
-    table("links", 680, 60, 220, "target_links (m : n)", ["from_target_id → to_target_id", "kind: continuation, split, merge,", "possible, duplicate · confidence 0..1"], "db")
+    table("links", 680, 40, 220, "target_links (m : n)", ["from_target_id → to_target_id", "probability 0..1 (сума на ціль ≤ 1)", "distance_km, minutes_apart,", "heading_diff_deg, required_minutes"], "db")
+    table("srcstat", 40, 470, 220, "source_daily_stats / source_copies", ["source_id, day: targets, copies,", "copied_by, lead_seconds_sum", "copier → original, day: count, delay"], "src")
 
     d.edge("sources", "raw", "1 : n", exit=(0.5, 1), entry=(0.5, 0))
     d.edge("raw", "obs", "1 : 0..n", exit=(1, 0.5), entry=(0, 0.5))
     d.edge("obs", "tto", "1 : 0..1", exit=(1, 0.5), entry=(0, 0.5))
-    d.edge("obs", "links", "раніше → пізніше", exit=(1, 0.15), entry=(0, 0.5), dashed=True)
+    d.edge("obs", "links", "тригер: кінематика", exit=(1, 0.15), entry=(0, 0.5), dashed=True)
+    d.edge("obs", "srcstat", "тригер: дублі", exit=(0.05, 1), entry=(1, 0.3), dashed=True)
     d.edge("tto", "trk", "n : 1", exit=(1, 0.5), entry=(0, 0.5))
     d.edge("trk", "rev", "1 : n (append-only)", exit=(0.5, 1), entry=(0.5, 0))
     d.edge("obs", "places", "location / origin / destination", exit=(0.5, 1), entry=(0.5, 0), dashed=True)
@@ -196,7 +209,7 @@ def datamodel() -> None:
     d.edge("trk", "tax", exit=(0, 0.85), entry=(1, 0.5), dashed=True)
     d.edge("alerts", "places", exit=(1, 0.5), entry=(0, 0.5), dashed=True)
     d.edge("raw", "alerts", "start/end", exit=(0.5, 1), entry=(0.5, 0), dashed=True)
-    d.note(40, 470, 260, 90, "★ — ключ ідемпотентності / replay.<br>Ланцюжок походження: карта → track → track_targets → target → raw_message → source → URL оригіналу. Нічого не видаляється; дублікати лишаються.")
+    d.note(40, 590, 260, 90, "★ — ключ ідемпотентності / replay.<br>Ланцюжок походження: карта → track → track_targets → target → raw_message → source → URL оригіналу. Нічого не видаляється; дублікати лишаються.")
     d.write()
 
 
@@ -214,7 +227,7 @@ def correlation() -> None:
     d.box("att", x, 590, w, 80, "Приєднати до треку<br><font style='font-size:10px'>класифікація лише уточнюється; новіший → last_location, шлях, напрямок; старіший → тільки provenance; association_reason зберігає розклад балів</font>", color="worker")
     d.box("conf", x, 700, w, 60, "track_confidence = найкраща target<br>+1 за ≥2 джерела, +1 за ≥3 повідомлення", color="worker")
     d.box("rev", x, 790, w, 50, "Revision (час події) → NOTIFY TrackUpserted", color="db")
-    d.box("links", 800, 520, 280, 90, "target_links (m : n)<br><font style='font-size:10px'>попередня ціль треку → нова: continuation; інші треки ≥ 0.6: merge; трек, зайнятий цим повідомленням: split; 0.45–0.6: possible; дубль: duplicate</font>", color="db")
+    d.box("links", 800, 520, 280, 110, "БД, тригер на targets: target_links<br><font style='font-size:10px'>попередники у вікні класу, які могли долетіти на крейсерській швидкості (розрив між площами, розворот до 4 хв); ймовірності нормовані до суми ≤ 1; дубль = 1. Сліди на карті — лише з цих зв'язків. Той самий тригер веде копії джерел і їх рейтинг.</font>", color="db")
 
     d.box("close1", 800, 230, 280, 70, "Відбій тривоги / «загроза минула»<br><font style='font-size:10px'>закриває активні треки в тій області (Cancelled)</font>", color="red")
     d.box("close2", 800, 320, 280, 70, "TrackWatchdog (щохвилини)<br><font style='font-size:10px'>без оновлень 2 × вікно класу → Closed(timeout)</font>", color="red")

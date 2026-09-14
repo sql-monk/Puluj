@@ -5,9 +5,17 @@ using Puluj.Collectors.Telegram;
 
 namespace Puluj.Collectors;
 
+/// <summary>Names the host uses to pick collectors for a process (Worker:Roles).</summary>
+public static class CollectorNames
+{
+    public const string Telegram = "telegram";
+    public const string AlertsInUa = "alerts";
+}
+
 public static class DependencyInjection
 {
-    public static IServiceCollection AddPulujCollectors(this IServiceCollection services, IConfiguration configuration)
+    /// <param name="names">Collectors to run in this process (CollectorNames); null = all of them.</param>
+    public static IServiceCollection AddPulujCollectors(this IServiceCollection services, IConfiguration configuration, IReadOnlyCollection<string>? names = null)
     {
         services.Configure<AlertsInUaOptions>(configuration.GetSection(AlertsInUaOptions.Section));
         services.Configure<TelegramOptions>(configuration.GetSection(TelegramOptions.Section));
@@ -17,8 +25,14 @@ public static class DependencyInjection
             .AddStandardResilienceHandler();
 
         services.AddSingleton<CollectorStateStore>();
-        services.AddSingleton<ICollector, AlertsInUaCollector>();
-        services.AddSingleton<ICollector, TelegramCollector>();
+        if (names is null || names.Contains(CollectorNames.AlertsInUa))
+        {
+            services.AddSingleton<ICollector, AlertsInUaCollector>();
+        }
+        if (names is null || names.Contains(CollectorNames.Telegram))
+        {
+            services.AddSingleton<ICollector, TelegramCollector>();
+        }
         services.AddHostedService<CollectorSupervisor>();
         return services;
     }

@@ -77,7 +77,7 @@ export function etaConfidence(eta: EtaResult | null): string {
 export function fixChain(track: TrackDto): string {
   const fixes = track.fixes
   if (fixes.length < 2) return ''
-  const earlier = fixes.slice(0, -1).map((f) => `${f.approach ? 'на підході до ' : ''}${f.placeName ?? '?'} ${clock(f.at)}`)
+  const earlier = fixes.slice(0, -1).map((f) => `${f.approach ? 'на підході до ' : ''}${f.placeName ?? '?'} ${clock(f.at)} (${Math.round(f.probability * 100)}%)`)
   const now = track.lastLocation?.placeName ?? fixes[fixes.length - 1].placeName ?? '?'
   return `${earlier.join(' → ')} → зараз: ${now}`
 }

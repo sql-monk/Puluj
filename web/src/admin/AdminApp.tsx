@@ -1,28 +1,50 @@
 import { useCallback, useEffect, useState } from 'react'
-import { admin, AdminError, getAdminToken, setAdminToken, type AdminSourceDto, type AdminStatusDto, type SettingDto } from '../../api/admin'
-import { Badge, Field, findSetting, Section, Toggle, type Draft } from './fields'
-import SourcesEditor from './SourcesEditor'
+import { admin, AdminError, getAdminToken, setAdminToken, type AdminSourceDto, type AdminStatusDto, type SettingDto } from '../api/admin'
+import { Badge, Field, findSetting, Section, Toggle, type Draft } from '../components/settings/fields'
+import SourceRatingPanel from '../components/settings/SourceRatingPanel'
+import SourcesEditor from '../components/settings/SourcesEditor'
+import { CollectorsPanel, DbPanel, LogsPanel, OverviewPanel, ProcessingPanel } from './OpsPanels'
 
-type SectionId = 'sources' | 'alerts' | 'telegram' | 'llm' | 'system'
+/** Where the public map lives (another service, another port); overridable at build time. */
+const MAP_URL: string = (import.meta.env.VITE_MAP_URL as string | undefined) ?? `${window.location.protocol}//${window.location.hostname}:5257/`
 
-const NAV: { id: SectionId; label: string }[] = [
-  { id: 'sources', label: 'Джерела' },
-  { id: 'alerts', label: 'alerts.in.ua' },
-  { id: 'telegram', label: 'Telegram' },
-  { id: 'llm', label: 'LLM' },
-  { id: 'system', label: 'Система' },
+type SectionId = 'overview' | 'collectors' | 'processing' | 'db' | 'logs' | 'sources' | 'rating' | 'alerts' | 'telegram' | 'llm' | 'system'
+
+const NAV: { id: SectionId; label: string; group: string }[] = [
+  { id: 'overview', label: 'Стан', group: 'Моніторинг' },
+  { id: 'collectors', label: 'Колектори', group: 'Моніторинг' },
+  { id: 'processing', label: 'Обробка', group: 'Моніторинг' },
+  { id: 'db', label: 'База даних', group: 'Моніторинг' },
+  { id: 'logs', label: 'Логи', group: 'Моніторинг' },
+  { id: 'sources', label: 'Джерела', group: 'Налаштування' },
+  { id: 'rating', label: 'Рейтинг джерел', group: 'Налаштування' },
+  { id: 'alerts', label: 'alerts.in.ua', group: 'Налаштування' },
+  { id: 'telegram', label: 'Telegram', group: 'Налаштування' },
+  { id: 'llm', label: 'LLM', group: 'Налаштування' },
+  { id: 'system', label: 'Система', group: 'Налаштування' },
 ]
 
-interface Props {
-  onClose: () => void
+function sectionFromHash(): SectionId {
+  const id = window.location.hash.replace(/^#\/?/, '')
+  return NAV.some((n) => n.id === id) ? (id as SectionId) : 'overview'
 }
 
 /**
- * Full-screen settings page (#/settings). Values go to the app_settings table through /api/admin/*; the Worker
+ * The admin panel (its own service, port 5258): monitoring of every component (status, collectors, processing,
+ * database, logs) and all the settings. Values go to the app_settings table through /api/admin/*; the Worker
  * picks them up within seconds and restarts its collectors — no process restart, no .env editing.
  */
-export default function SettingsPage({ onClose }: Props) {
-  const [section, setSection] = useState<SectionId>('sources')
+export default function AdminApp() {
+  const [section, setSectionState] = useState<SectionId>(sectionFromHash)
+  const setSection = (id: SectionId) => {
+    window.location.assign(`#/${id}`)
+    setSectionState(id)
+  }
+  useEffect(() => {
+    const onHash = () => setSectionState(sectionFromHash())
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
   const [settings, setSettings] = useState<SettingDto[]>([])
   const [status, setStatus] = useState<AdminStatusDto | null>(null)
   const [sources, setSources] = useState<AdminSourceDto[]>([])
@@ -74,12 +96,12 @@ export default function SettingsPage({ onClose }: Props) {
   const props: TabProps = { status, draft, change, s, notify: setMessage, reload: load, sources }
 
   return (
-    <div className="pointer-events-auto absolute inset-0 z-40 flex flex-col bg-slate-100 dark:bg-slate-950 dark:text-slate-100">
+    <div className="absolute inset-0 flex flex-col bg-slate-100 dark:bg-slate-950 dark:text-slate-100">
       <header className="flex items-center gap-3 border-b border-slate-200 bg-white px-4 py-2 text-sm dark:border-slate-700 dark:bg-slate-900">
-        <button className="rounded px-2 py-1 hover:bg-slate-200 dark:hover:bg-slate-700" onClick={onClose}>
+        <a className="rounded px-2 py-1 hover:bg-slate-200 dark:hover:bg-slate-700" href={MAP_URL}>
           ← Карта
-        </button>
-        <span className="font-semibold">Налаштування</span>
+        </a>
+        <span className="font-semibold">Puluj · Адміністрування</span>
         <span className="ml-auto flex items-center gap-2 text-xs">
           {status && <Badge ok={status.workerAlive} text={status.workerAlive ? 'Worker працює' : 'Worker не відповідає'} />}
           {status && <Badge ok={status.alertsConfigured} text={status.alertsConfigured ? 'alerts.in.ua ✓' : 'alerts.in.ua —'} />}
@@ -106,23 +128,35 @@ export default function SettingsPage({ onClose }: Props) {
       ) : (
         <div className="flex min-h-0 flex-1">
           <nav className="w-44 shrink-0 border-r border-slate-200 bg-white p-2 text-sm dark:border-slate-700 dark:bg-slate-900">
-            {NAV.map((n) => (
-              <button key={n.id} className={`block w-full rounded px-3 py-1.5 text-left ${section === n.id ? 'bg-slate-200 font-medium dark:bg-slate-700' : 'hover:bg-slate-100 dark:hover:bg-slate-800'}`} onClick={() => setSection(n.id)}>
-                {n.label}
-              </button>
+            {['Моніторинг', 'Налаштування'].map((group) => (
+              <div key={group} className="mb-2">
+                <div className="px-3 pb-1 pt-2 text-[10px] uppercase tracking-wide text-slate-400">{group}</div>
+                {NAV.filter((n) => n.group === group).map((n) => (
+                  <button key={n.id} className={`block w-full rounded px-3 py-1.5 text-left ${section === n.id ? 'bg-slate-200 font-medium dark:bg-slate-700' : 'hover:bg-slate-100 dark:hover:bg-slate-800'}`} onClick={() => setSection(n.id)}>
+                    {n.label}
+                  </button>
+                ))}
+              </div>
             ))}
           </nav>
 
           <main className="flex min-w-0 flex-1 flex-col">
             <div className="flex-1 space-y-4 overflow-y-auto p-4">
               <div className="mx-auto max-w-5xl space-y-4">
+                {section === 'overview' && <OverviewPanel />}
+                {section === 'collectors' && <CollectorsPanel />}
+                {section === 'processing' && <ProcessingPanel />}
+                {section === 'db' && <DbPanel />}
+                {section === 'logs' && <LogsPanel />}
                 {section === 'sources' && <SourcesEditor sources={sources} reload={load} notify={setMessage} />}
+                {section === 'rating' && <SourceRatingPanel />}
                 {section === 'alerts' && <AlertsSection {...props} />}
                 {section === 'telegram' && <TelegramSection {...props} />}
                 {section === 'llm' && <LlmSection {...props} />}
                 {section === 'system' && <SystemSection {...props} />}
               </div>
             </div>
+            {NAV.find((n) => n.id === section)?.group === 'Налаштування' && (
             <div className="flex items-center justify-between gap-3 border-t border-slate-200 bg-white px-4 py-3 text-sm dark:border-slate-700 dark:bg-slate-900">
               <span className={`min-h-5 text-xs ${message ? (message.ok ? 'text-emerald-600' : 'text-red-600') : 'text-slate-400'}`}>{message?.text ?? (dirty ? 'Є незбережені зміни' : '')}</span>
               <div className="flex gap-2">
@@ -134,6 +168,7 @@ export default function SettingsPage({ onClose }: Props) {
                 </button>
               </div>
             </div>
+            )}
           </main>
         </div>
       )}

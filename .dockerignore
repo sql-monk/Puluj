@@ -1,0 +1,12 @@
+# Build context for deploy/Dockerfile.*: sources, web/ and data/ only.
+**/bin/
+**/obj/
+**/node_modules/
+**/wwwroot/
+logs/
+.git/
+.env
+*.session
+*.session.updates
+tests/
+docs/

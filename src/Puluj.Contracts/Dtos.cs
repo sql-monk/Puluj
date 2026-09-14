@@ -22,7 +22,8 @@ public sealed record DirectionDto(double Degrees, string Kind, string Confidence
 
 /// <summary>One earlier reported position of a track ("was near Romny at 21:40"): the crumbs drawn behind the marker.</summary>
 /// <param name="Approach">The report only named a destination: the point is that place, the object was on the way to it.</param>
-public sealed record FixDto(DateTimeOffset At, string? PlaceName, string Kind, Point Point, double? AccuracyKm, bool Approach);
+/// <param name="Probability">That this earlier report is the same object as the next one in the chain (1 for the current position).</param>
+public sealed record FixDto(DateTimeOffset At, string? PlaceName, string Kind, Point Point, double? AccuracyKm, bool Approach, double Probability);
 
 public sealed record TrackDto(
     long Id,
@@ -51,6 +52,13 @@ public sealed record TrackDto(
 public sealed record AlertDto(long Id, int PlaceId, string PlaceName, string AlertType, string Level, DateTimeOffset StartedAt, DateTimeOffset? EndedAt, LocationDto? Location);
 
 public sealed record SnapshotDto(DateTimeOffset At, bool Historical, IReadOnlyList<TrackDto> Tracks, IReadOnlyList<AlertDto> Alerts);
+
+/// <summary>One reported position of a track in a replay window: where it was said to be, when, and on what course.</summary>
+public sealed record ReplaySampleDto(DateTimeOffset At, Point Point, double? DirectionDeg, bool Approach);
+/// <summary>A track over a replay window: its class and every reported position in order, oldest first.</summary>
+public sealed record ReplayTrackDto(long Id, TargetTypeDto Type, IReadOnlyList<ReplaySampleDto> Samples);
+/// <summary>Everything a timelapse of the window needs in one payload; the client interpolates between the samples.</summary>
+public sealed record ReplayDto(DateTimeOffset From, DateTimeOffset To, IReadOnlyList<ReplayTrackDto> Tracks);
 
 public sealed record SourceDto(int Id, string Code, string Name, string Type, double TrustLevel, string? Url);
 
@@ -81,8 +89,32 @@ public sealed record TargetDto(
     long? TrackId,
     IReadOnlyList<TargetLinkDto> Links);
 
-/// <summary>A link from this target to another: which one, how ("continuation", "split", "merge", "possible", "duplicate"), how sure, and whether the other one is earlier ("from") or later ("to").</summary>
-public sealed record TargetLinkDto(long TargetId, string Kind, double Confidence, string Direction);
+/// <summary>A link from this target to another: which one, how ("continuation" = kinematic predecessor, "duplicate"), how probable,
+/// whether the other one is earlier ("from") or later ("to"), and the kinematics behind the number.</summary>
+/// <summary>A probable earlier report of the same object: generation 1 = directly before the track's newest target, 2 = before that.</summary>
+/// <summary>
+/// A node of the selected target's family. Generation = how many generations above the head (0 = the head's own,
+/// i.e. siblings and cousins). Ancestral = on the head's own ancestry (parent, grandparent); otherwise a relative:
+/// where an ancestor could have flown instead. DisplayMode / TypeLabel / DirectionDeg let the map draw the node as
+/// the target it is (class glyph, turned by its course).
+/// </summary>
+public sealed record PredecessorDto(long TargetId, int Generation, bool Ancestral, DateTimeOffset At, string? PlaceName, string Kind, Point? Point, double? AccuracyKm, bool Approach, string? Label,
+    string DisplayMode, string TypeLabel, double? DirectionDeg);
+
+/// <param name="Probability">The link's own probability.</param>
+/// <param name="PathProbability">Product of the probabilities from the head down to this link.</param>
+/// <summary>Generation = the generation of `From` above the head. Ancestral = a link on the head's own ancestry.</summary>
+public sealed record PredecessorLinkDto(long FromTargetId, long ToTargetId, int Generation, bool Ancestral, string Kind, double Probability, double PathProbability);
+
+public sealed record PredecessorsDto(long TrackId, long HeadTargetId, IReadOnlyList<PredecessorDto> Targets, IReadOnlyList<PredecessorLinkDto> Links);
+
+public sealed record TargetLinkDto(long TargetId, string Kind, double Probability, string Direction, double? DistanceKm, double? MinutesApart, double? HeadingDiffDeg, double? RequiredMinutes);
+
+/// <summary>Source rating over time: per-day counters and the earned rating (0..1), plus who copies whom and the groups that follow.</summary>
+public sealed record SourceRatingDayDto(DateOnly Day, int Targets, int Copies, int CopiedBy, double? AvgLeadSeconds, double? Rating);
+public sealed record SourceRatingDto(int Id, string Name, double TrustLevel, double? Rating, int? Group, IReadOnlyList<SourceRatingDayDto> Days);
+public sealed record SourceCopyDto(int CopierId, int OriginalId, int Count, double AvgDelaySeconds);
+public sealed record SourceRatingReportDto(IReadOnlyList<DateOnly> Days, IReadOnlyList<SourceRatingDto> Sources, IReadOnlyList<SourceCopyDto> Copies, IReadOnlyList<IReadOnlyList<int>> Groups);
 
 public sealed record TrackDetailsDto(TrackDto Track, IReadOnlyList<TargetDto> Targets);
 

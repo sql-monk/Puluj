@@ -5,7 +5,8 @@ COPY src/ src/
 RUN dotnet restore src/Puluj.Worker/Puluj.Worker.csproj
 RUN dotnet publish src/Puluj.Worker/Puluj.Worker.csproj -c Release -o /app --no-restore
 
-FROM mcr.microsoft.com/dotnet/runtime:10.0
+# aspnet, not runtime: Serilog.AspNetCore references the Microsoft.AspNetCore.App shared framework.
+FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app
 COPY --from=build /app .
 COPY data/ /app/data/

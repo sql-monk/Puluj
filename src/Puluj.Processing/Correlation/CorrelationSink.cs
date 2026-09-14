@@ -22,8 +22,6 @@ public sealed class CorrelationSink(
     ILogger<CorrelationSink> logger) : ITargetSink
 {
     private const int CandidateWindowMinutes = 120;
-    /// <summary>Candidates scoring at least this (but below the attach threshold) are kept as "possible" links.</summary>
-    private const double PossibleThreshold = 0.45;
 
     public async Task OnTargetsAsync(PulujDbContext db, IReadOnlyList<Target> targets, Source source, ICollection<PulujEvent> events, CancellationToken ct)
     {
@@ -81,7 +79,6 @@ public sealed class CorrelationSink(
                     AssociationReason = System.Text.Json.JsonDocument.Parse($"{{\"duplicateOf\":{duplicateOf.TargetId}}}"),
                 });
                 usedTracks.Add(track.TargetTrackId);
-                AddLink(db, duplicateOf.TargetId, o.TargetId, TargetLinkKind.Duplicate, 1, now);
                 await RecountSourcesAsync(db, track, o.SourceId, ct);
                 track.TrackConfidence = TrackUpdater.ComputeTrackConfidence(track, await BestConfidenceAsync(db, track, o, ct));
                 track.UpdatedAt = Later(track.UpdatedAt, o.ObservedAt);
@@ -106,27 +103,24 @@ public sealed class CorrelationSink(
         // Candidate window is generous; the per-pair class profile (target class, else track class) drives the score.
         var since = o.ObservedAt.AddMinutes(-CandidateWindowMinutes);
         var until = o.ObservedAt.AddMinutes(CandidateWindowMinutes);
+        // A track closed by the watchdog's timeout is still a candidate while its last report is inside the window:
+        // the object reported again is the same object (out-of-order delivery, a rebuild racing the watchdog).
         var candidates = await db.TargetTracks
-            .Where(t => t.Status == TrackStatus.Active && t.TargetCategoryId == o.TargetCategoryId && t.LastSeenAt >= since && t.LastSeenAt <= until)
+            .Where(t => (t.Status == TrackStatus.Active || t.ClosedReason == "timeout") && t.TargetCategoryId == o.TargetCategoryId && t.LastSeenAt >= since && t.LastSeenAt <= until)
             .ToListAsync(ct);
 
         TargetTrack? best = null;
         AssociationScore? bestScore = null;
-        // Every scored candidate is remembered: the ones not chosen still become links (merge / split / possible).
-        var scored = new List<(TargetTrack Track, AssociationScore Score, bool Blocked)>();
-        foreach (var t in candidates.Where(t => Correlator.ClassCompatible(o, t)))
+        foreach (var t in candidates.Where(t => Correlator.ClassCompatible(o, t) && !usedTracks.Contains(t.TargetTrackId)))
         {
             var profile = indexes.Taxonomy.ClassProfile(o.TargetClassId ?? t.TargetClassId);
             var score = Correlator.Score(o, t, profile, options.CurrentValue.SlackKm, oAnchor, Correlator.AnchorOf(t, indexes.Gazetteer));
-            var blocked = usedTracks.Contains(t.TargetTrackId); // another fact of this message already continues it
-            scored.Add((t, score, blocked));
-            if (!blocked && score.Total >= options.CurrentValue.AttachThreshold && (bestScore is null || score.Total > bestScore.Total))
+            if (score.Total >= options.CurrentValue.AttachThreshold && (bestScore is null || score.Total > bestScore.Total))
             {
                 best = t;
                 bestScore = score;
             }
         }
-        var predecessorOfBest = best?.LastTargetId;
 
         if (best is null)
         {
@@ -147,6 +141,11 @@ public sealed class CorrelationSink(
         }
         else
         {
+            if (best.Status != TrackStatus.Active)
+            {
+                best.Status = TrackStatus.Active;
+                best.ClosedReason = null;
+            }
             TrackUpdater.Apply(best, o, now, isNewer: o.ObservedAt >= best.LastSeenAt, destination, approach);
             db.TrackTargets.Add(new TrackTarget
             {
@@ -162,8 +161,6 @@ public sealed class CorrelationSink(
             await db.SaveChangesAsync(ct);
             logger.LogInformation("Target {Obs} attached to track {Track} (score {Score:F2})", o.TargetId, best.TargetTrackId, bestScore.Total);
         }
-        LinkCandidates(db, o, scored, best, predecessorOfBest, bestScore, now);
-        await db.SaveChangesAsync(ct);
         usedTracks.Add(best.TargetTrackId);
         events.Add(new PulujEvent(PulujEventType.TrackUpserted, best.TargetTrackId, now));
     }
@@ -221,45 +218,6 @@ public sealed class CorrelationSink(
     }
 
     private static DateTimeOffset Later(DateTimeOffset a, DateTimeOffset b) => a > b ? a : b;
-
-    /// <summary>
-    /// Target-to-target links from one correlation pass. The chosen track's previous sighting continues into this one;
-    /// other tracks that also scored high enough to attach merge into it; a track already continued by another fact of
-    /// the same message splits into this one as well; weaker matches are kept as "possible".
-    /// </summary>
-    private void LinkCandidates(PulujDbContext db, Target o, List<(TargetTrack Track, AssociationScore Score, bool Blocked)> scored, TargetTrack? chosen, long? predecessorOfChosen, AssociationScore? chosenScore, DateTimeOffset now)
-    {
-        if (chosen is not null && predecessorOfChosen is long prev && chosenScore is not null)
-        {
-            AddLink(db, prev, o.TargetId, TargetLinkKind.Continuation, chosenScore.Total, now);
-        }
-        foreach (var (track, score, blocked) in scored)
-        {
-            if (track.LastTargetId is not long from || (chosen is not null && track.TargetTrackId == chosen.TargetTrackId))
-            {
-                continue;
-            }
-            if (score.Total >= options.CurrentValue.AttachThreshold)
-            {
-                // A track that could have taken this fact but did not: either it already continues into another fact
-                // of this message (the group split), or the fact continues several tracks at once (they merged).
-                AddLink(db, from, o.TargetId, blocked ? TargetLinkKind.Split : TargetLinkKind.Merge, score.Total, now);
-            }
-            else if (score.Total >= PossibleThreshold)
-            {
-                AddLink(db, from, o.TargetId, TargetLinkKind.Possible, score.Total, now);
-            }
-        }
-    }
-
-    private static void AddLink(PulujDbContext db, long from, long to, TargetLinkKind kind, double confidence, DateTimeOffset now)
-    {
-        if (from == to || db.TargetLinks.Local.Any(l => l.FromTargetId == from && l.ToTargetId == to))
-        {
-            return;
-        }
-        db.TargetLinks.Add(new TargetLink { FromTargetId = from, ToTargetId = to, Kind = kind, Confidence = Math.Round(confidence, 3), CreatedAt = now });
-    }
 
     private static async Task RecountSourcesAsync(PulujDbContext db, TargetTrack track, int currentSourceId, CancellationToken ct)
     {

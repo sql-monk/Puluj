@@ -97,6 +97,13 @@ public sealed class LlmParser : IParser
         {
             return facts;
         }
+        // History (a rebuild, a backfill) stays with the rules: the model is for the live picture, not for years of archive.
+        var maxAge = _options.MaxMessageAgeHours;
+        if (maxAge > 0 && ctx.PublishedAt is { } publishedAt && DateTimeOffset.UtcNow - publishedAt > TimeSpan.FromHours(maxAge))
+        {
+            _metrics.LlmCall("stale");
+            return facts;
+        }
         using var lease = _limiter.AttemptAcquire();
         if (!lease.IsAcquired)
         {

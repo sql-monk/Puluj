@@ -56,18 +56,18 @@ public sealed class DtoMapper(ReferenceCache refs)
     }
 
     /// <summary>The position an target reported: its location, else the destination it named (an approach).</summary>
-    public FixDto? Fix(Target o)
+    public FixDto? Fix(Target o, double probability = 1)
     {
         if (o.Location is not null && o.LocationKind != LocationKind.DirectionOnly)
         {
             var p = o.Location.Centroid;
             p.SRID = Geo.Srid;
-            return new FixDto(o.ObservedAt, refs.Place(o.LocationPlaceId)?.Name, o.LocationKind.ToString(), p, o.LocationAccuracyKm, false);
+            return new FixDto(o.ObservedAt, refs.Place(o.LocationPlaceId)?.Name, o.LocationKind.ToString(), p, o.LocationAccuracyKm, false, probability);
         }
         var destId = o.LocationKind == LocationKind.DirectionOnly ? (o.LocationPlaceId ?? o.DestinationPlaceId) : o.DestinationPlaceId;
         if (refs.Place(destId) is { } dest)
         {
-            return new FixDto(o.ObservedAt, dest.Name, LocationKind.DirectionOnly.ToString(), Geo.Point(dest.Lon, dest.Lat), dest.RadiusKm, true);
+            return new FixDto(o.ObservedAt, dest.Name, LocationKind.DirectionOnly.ToString(), Geo.Point(dest.Lon, dest.Lat), dest.RadiusKm, true, probability);
         }
         return null;
     }

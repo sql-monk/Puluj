@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <UserSecretsId>puluj-admin</UserSecretsId>
+    <!-- Otherwise the referenced Api project's wwwroot (the map SPA) is served here too in Development. -->
+    <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The admin panel reuses the Api's read services (reference cache, DTO mapping, snapshot / rating queries). -->
+    <ProjectReference Include="..\Puluj.Api\Puluj.Api.csproj" />
+    <ProjectReference Include="..\Puluj.Infrastructure\Puluj.Infrastructure.csproj" />
+    <ProjectReference Include="..\Puluj.Contracts\Puluj.Contracts.csproj" />
+    <ProjectReference Include="..\Puluj.Collectors\Puluj.Collectors.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+    <PackageReference Include="AspNetCore.HealthChecks.NpgSql" />
+    <PackageReference Include="Serilog.AspNetCore" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.Http" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" />
+  </ItemGroup>
+  <!-- The Api reference drags its appsettings*.json into publish next to ours (NETSDK1152); this service has its own. -->
+  <Target Name="DropReferencedAppSettings" AfterTargets="ComputeFilesToPublish" BeforeTargets="_HandleFileConflictsForPublish">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
+        Condition="$([System.String]::Copy('%(ResolvedFileToPublish.RelativePath)').StartsWith('appsettings')) And $([System.String]::Copy('%(ResolvedFileToPublish.Identity)').Contains('Puluj.Api'))" />
+    </ItemGroup>
+  </Target>
+</Project>

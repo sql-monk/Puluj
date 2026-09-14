@@ -11,6 +11,11 @@ public sealed class LlmOptions
     public int TimeoutSeconds { get; set; } = 20;
     /// <summary>Cap on LLM calls per minute; messages beyond it fall back to rule results only.</summary>
     public int MaxCallsPerMinute { get; set; } = 20;
+    /// <summary>
+    /// Messages published longer ago than this are not sent to the model: the fallback serves the live picture, and a
+    /// rebuild of years of history would otherwise mean tens of thousands of paid calls at seconds each. 0 = no limit.
+    /// </summary>
+    public double MaxMessageAgeHours { get; set; } = 72;
     /// <summary>Bumped whenever the prompt changes; stored with every LLM-derived target.</summary>
     public string PromptVersion { get; set; } = "1";
 }

@@ -50,6 +50,7 @@ public sealed class GazetteerSeeder(SeedFiles files, IOptions<SeedOptions> optio
             regions += await ImportRegionsAsync(db, existing, regionsFile.Regions, file, ct);
         }
         regions += await ImportCityDistrictsAsync(db, existing, regionsFile.KyivDistricts ?? [], "kyiv_districts.geojson", "iso:UA-30", ct);
+        regions += await ImportCodAdminAsync(db, existing, ct);
         foreach (var area in regionsFile.NamedAreas ?? [])
         {
             var ring = area.Polygon.Select(p => new Coordinate(p[0], p[1])).ToArray();
@@ -147,6 +148,79 @@ public sealed class GazetteerSeeder(SeedFiles files, IOptions<SeedOptions> optio
             place.Parent = city;
             count++;
         }
+        return count;
+    }
+
+    /// <summary>
+    /// Raions (ADM2, 136 + the two city-raions) and hromadas (ADM3, ~1 770) of the 2020 reform from the UN COD-AB
+    /// dataset (data/gazetteer/ukr_adm{2,3}_cod.geojson, scripts/gazetteer/download.ps1). These are the levels the
+    /// alerts are published at. Raions are parented to the oblast whose polygon holds their centroid, hromadas to
+    /// their raion by pcode. Kyiv and Sevastopol already exist as city-regions and are skipped at both levels.
+    /// Name variants are the full forms only ("бахмутськ район", "вовчанськ громад"), so the parser never confuses
+    /// a raion with the town it is named after.
+    /// </summary>
+    private async Task<int> ImportCodAdminAsync(PulujDbContext db, Dictionary<string, Place> existing, CancellationToken ct)
+    {
+        var raionsPath = files.Resolve("gazetteer", "ukr_adm2_cod.geojson");
+        var hromadasPath = files.Resolve("gazetteer", "ukr_adm3_cod.geojson");
+        if (!File.Exists(raionsPath) || !File.Exists(hromadasPath))
+        {
+            logger.LogWarning("COD-AB files ukr_adm2_cod.geojson / ukr_adm3_cod.geojson missing; raions and hromadas not imported (run scripts/gazetteer/download.ps1)");
+            return 0;
+        }
+        var oblasts = existing.Values
+            .Where(p => p.CountryCode == "UA" && p.ExternalKey.StartsWith("iso:", StringComparison.Ordinal) && (p.Level == PlaceLevel.Region || (p.Level == PlaceLevel.City && p.ParentId is null)))
+            .ToList();
+        static bool IsCityRegion(string? pcode) => pcode is not null && (pcode.StartsWith("UA80", StringComparison.Ordinal) || pcode.StartsWith("UA85", StringComparison.Ordinal));
+
+        var count = 0;
+        var raionByPcode = new Dictionary<string, Place>();
+        await using (var stream = File.OpenRead(raionsPath))
+        {
+            var fc = await JsonSerializer.DeserializeAsync<FeatureCollection>(stream, GeoJson, ct);
+            foreach (var f in fc ?? [])
+            {
+                var pcode = f.Attributes.GetOptionalValue("adm2_pcode")?.ToString();
+                var name = f.Attributes.GetOptionalValue("adm2_name1")?.ToString();
+                if (pcode is null || name is null || f.Geometry is null || IsCityRegion(pcode))
+                {
+                    continue;
+                }
+                var geom = TopologyPreservingSimplifier.Simplify(f.Geometry, SimplifyToleranceDeg * 1.5);
+                geom.SRID = Geo.Srid;
+                var full = $"{name} район";
+                var place = Upsert(db, existing, $"cod:{pcode}", full, NameVariantGenerator.ForSettlement(full), PlaceLevel.District, "UA", geom);
+                var centroid = geom.Centroid;
+                place.Parent = oblasts.FirstOrDefault(o => o.Geometry.Contains(centroid)) ?? oblasts.OrderBy(o => o.Geometry.Distance(centroid)).FirstOrDefault();
+                raionByPcode[pcode] = place;
+                count++;
+            }
+        }
+        await using (var stream = File.OpenRead(hromadasPath))
+        {
+            var fc = await JsonSerializer.DeserializeAsync<FeatureCollection>(stream, GeoJson, ct);
+            foreach (var f in fc ?? [])
+            {
+                var pcode = f.Attributes.GetOptionalValue("adm3_pcode")?.ToString();
+                var name = f.Attributes.GetOptionalValue("adm3_name1")?.ToString();
+                var raionPcode = f.Attributes.GetOptionalValue("adm2_pcode")?.ToString();
+                if (pcode is null || name is null || f.Geometry is null || IsCityRegion(pcode))
+                {
+                    continue;
+                }
+                var geom = TopologyPreservingSimplifier.Simplify(f.Geometry, SimplifyToleranceDeg);
+                geom.SRID = Geo.Srid;
+                var full = $"{name} територіальна громада";
+                var variants = NameVariantGenerator.ForSettlement(full).Concat(NameVariantGenerator.ForSettlement($"{name} громада")).Concat(NameVariantGenerator.ForSettlement($"{name} ТГ"));
+                var place = Upsert(db, existing, $"cod:{pcode}", full, variants, PlaceLevel.Hromada, "UA", geom);
+                if (raionPcode is not null && raionByPcode.TryGetValue(raionPcode, out var raion))
+                {
+                    place.Parent = raion;
+                }
+                count++;
+            }
+        }
+        logger.LogInformation("Gazetteer: {Raions} raions, {Total} raions + hromadas from COD-AB", raionByPcode.Count, count);
         return count;
     }
 

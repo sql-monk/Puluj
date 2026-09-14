@@ -4,6 +4,7 @@ import { api } from '../api/client'
 import type { TargetDto, RegionDto, TrackDto } from '../api/types'
 import { useEta } from '../eta/useEta'
 import { clock, confidenceLabel, directionText, etaConfidence, etaText, fixChain, locationKindLabel, timeAgo } from '../lib/format'
+import { placeWindow, useDraggable } from '../lib/useDraggable'
 import { hazardKind } from '../map/geojson'
 import { effectiveNow, usePalette, useStore } from '../store/useStore'
 import Highlight from './Highlight'
@@ -37,6 +38,8 @@ export default function TrackPopup({ map, track, anchor, onDetails, onClose }: P
   const el = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
   const [sheet, setSheet] = useState(() => window.innerWidth < 640)
+  // Dragged by its header; the offset is forgotten when another track is selected. Not on the phone sheet.
+  const drag = useDraggable(track.id, !sheet)
   const point = anchor ?? loc?.point?.coordinates ?? null
   const lon = point?.[0]
   const lat = point?.[1]
@@ -61,7 +64,8 @@ export default function TrackPopup({ map, track, anchor, onDetails, onClose }: P
     }
   }, [map, lon, lat])
 
-  // Right of and slightly below the click by default; flipped / clamped so it stays inside the map and off the feed column.
+  // Right of and slightly below the click by default; flipped / clamped so it stays inside the map and off the feed
+  // column. A drag moves it from there, still clamped to the map.
   useLayoutEffect(() => {
     const node = el.current
     if (!node || !pos || sheet) return
@@ -73,9 +77,9 @@ export default function TrackPopup({ map, track, anchor, onDetails, onClose }: P
     if (left + WIDTH > rightLimit) left = Math.max(8, pos.x - GAP - WIDTH)
     let top = pos.y + GAP
     if (top + h > box.height - 8) top = Math.max(52, pos.y - GAP - h)
-    node.style.left = `${left}px`
-    node.style.top = `${top}px`
+    placeWindow(node, left, top, drag.offset.current, box, WIDTH)
   })
+  void drag.tick
 
   const hazard = home && filters.highlightTargets ? hazardKind(track, home, clockNow, regionsById) : ''
   const sources = Math.max(track.distinctSourceCount, track.sourceIds.length)
@@ -89,7 +93,7 @@ export default function TrackPopup({ map, track, anchor, onDetails, onClose }: P
       style={sheet ? undefined : { width: WIDTH, left: -9999, top: -9999 }}
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="flex items-start justify-between gap-2 px-2.5 pt-2">
+      <div className={`flex items-start justify-between gap-2 px-2.5 pt-2 ${drag.handleProps.className}`} onPointerDown={drag.handleProps.onPointerDown} title={drag.handleProps.title}>
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-1 text-sm font-semibold">
             <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: palette.marker[track.type.displayMode] }} />

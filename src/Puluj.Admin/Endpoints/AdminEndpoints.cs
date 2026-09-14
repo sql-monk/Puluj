@@ -8,7 +8,7 @@ using Puluj.Domain.Enums;
 using Puluj.Infrastructure.Persistence;
 using Puluj.Infrastructure.Settings;
 
-namespace Puluj.Api;
+namespace Puluj.Admin;
 
 /// <summary>
 /// Settings page backend. Protected by the `Admin:Token` setting (header X-Admin-Token); while no token is configured,
@@ -87,7 +87,10 @@ public static class AdminEndpoints
         {
             var db = await store.GetAllAsync(ct);
             var alertsToken = await AlertsTokenAsync(factory, config, ct);
-            var heartbeat = db.TryGetValue("Runtime:Worker:Heartbeat", out var hb) && DateTimeOffset.TryParse(hb.Value, out var t) ? t : (DateTimeOffset?)null;
+            // Alive = every known Worker instance reported within 90 s; the oldest heartbeat is the one shown.
+            var now = clock.GetUtcNow();
+            var workers = OpsEndpoints.WorkerHeartbeats(db, now);
+            var heartbeat = workers.Count > 0 ? workers[0].At : (DateTimeOffset?)null;
             var llmKey = config["Llm:ApiKey"] ?? Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
             return new AdminStatusDto(
                 AlertsConfigured: config.GetValue<bool>("Collectors:AlertsInUa:Enabled") && !string.IsNullOrEmpty(alertsToken),
@@ -96,7 +99,7 @@ public static class AdminEndpoints
                 LlmConfigured: config.GetValue<bool>("Llm:Enabled") && !string.IsNullOrEmpty(llmKey),
                 TelegramStatus: db.TryGetValue("Runtime:Telegram:Status", out var ts) ? ts.Value : null,
                 AdminTokenSet: !string.IsNullOrEmpty(config["Admin:Token"]),
-                WorkerAlive: heartbeat is not null && clock.GetUtcNow() - heartbeat.Value < TimeSpan.FromSeconds(90),
+                WorkerAlive: heartbeat is not null && now - heartbeat.Value < TimeSpan.FromSeconds(90),
                 WorkerLastSeen: heartbeat);
         });
 
@@ -280,7 +283,7 @@ public static class AdminEndpoints
         return app;
     }
 
-    private static async ValueTask<object?> AuthorizeAsync(EndpointFilterInvocationContext ctx, EndpointFilterDelegate next)
+    internal static async ValueTask<object?> AuthorizeAsync(EndpointFilterInvocationContext ctx, EndpointFilterDelegate next)
     {
         var config = ctx.HttpContext.RequestServices.GetRequiredService<IConfiguration>();
         var token = config["Admin:Token"];

@@ -24,7 +24,8 @@ public sealed class SettingsStore(IDbContextFactory<PulujDbContext> factory, Tim
         "Collectors:AlertsInUa:Enabled", "Collectors:AlertsInUa:Token",
         "Collectors:Telegram:Enabled", "Collectors:Telegram:ApiId", "Collectors:Telegram:ApiHash", "Collectors:Telegram:Phone",
         "Collectors:Telegram:Password", "Collectors:Telegram:VerificationCode", "Collectors:Telegram:AutoJoin", "Collectors:Telegram:BackfillLimit",
-        "Llm:Enabled", "Llm:Model", "Llm:ApiKey",
+        "Collectors:Telegram:BackfillSince",
+        "Llm:Enabled", "Llm:Model", "Llm:ApiKey", "Llm:MaxMessageAgeHours",
         "Correlation:AttachThreshold",
         "Admin:Token",
     };

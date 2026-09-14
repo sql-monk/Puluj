@@ -13,10 +13,12 @@ namespace Puluj.Processing.Structured;
 /// <summary>
 /// Handles RawMessages produced by the alerts.in.ua collector (payload kind alert.started / alert.finished):
 /// maintains AirAlert intervals and emits AirRaidAlert / AlertCancelled targets without any NLP.
+/// The alert is pinned to the place of the level the feed names — oblast, raion, hromada or city — so the map
+/// colours exactly the polygon that is under alert (raions and hromadas come from COD-AB, see GazetteerSeeder).
 /// </summary>
 public sealed class AlertsInUaHandler(IIndexes indexes, INormalizer normalizer, ILogger<AlertsInUaHandler> logger)
 {
-    public const string Version = "alerts_in_ua-0.1";
+    public const string Version = "alerts_in_ua-0.2";
 
     public static bool CanHandle(RawMessage raw) =>
         raw.RawPayload is not null
@@ -31,6 +33,7 @@ public sealed class AlertsInUaHandler(IIndexes indexes, INormalizer normalizer, 
         var sourceAlertId = alert.GetProperty("id").ToString();
         var title = Str(alert, "location_title") ?? "";
         var oblast = Str(alert, "location_oblast") ?? title;
+        var raion = Str(alert, "location_raion");
         var locationType = Str(alert, "location_type") ?? "oblast";
         var alertType = Str(alert, "alert_type") switch
         {
@@ -41,13 +44,23 @@ public sealed class AlertsInUaHandler(IIndexes indexes, INormalizer normalizer, 
             "nuclear" => AirAlertType.Nuclear,
             _ => AirAlertType.Unknown,
         };
+        // The feed carries the administration's level where one is published (yellow = drones, red = missiles).
+        var level = Str(alert, "alert_level")?.ToLowerInvariant() switch
+        {
+            "yellow" => AirAlertLevel.Yellow,
+            "red" => AirAlertLevel.Red,
+            _ => AirAlertLevel.Unknown,
+        };
         var at = root.TryGetProperty("at", out var atEl) && DateTimeOffset.TryParse(atEl.GetString(), out var parsed) ? parsed : raw.PublishedAt;
 
-        // Only oblast-level polygons exist in the gazetteer today; raion/hromada alerts map to their oblast.
-        var place = ResolveRegion(locationType == "oblast" ? title : oblast) ?? ResolveRegion(title);
+        var place = Resolve(locationType, title, raion, oblast);
         if (place is null)
         {
-            logger.LogWarning("alerts.in.ua: unknown location '{Title}' / '{Oblast}'", title, oblast);
+            logger.LogWarning("alerts.in.ua: unknown location '{Title}' ({Type}) / '{Oblast}'", title, locationType, oblast);
+        }
+        else if (LevelOf(locationType) is { } wanted && place.Level != wanted)
+        {
+            logger.LogInformation("alerts.in.ua: '{Title}' ({Type}) resolved to {Level} '{Place}'", title, locationType, place.Level, place.Name);
         }
 
         var existing = await db.AirAlerts.FirstOrDefaultAsync(a => a.SourceId == source.SourceId && a.SourceAlertId == sourceAlertId, ct);
@@ -62,9 +75,14 @@ public sealed class AlertsInUaHandler(IIndexes indexes, INormalizer normalizer, 
                     SourceAlertId = sourceAlertId,
                     PlaceId = place.PlaceId,
                     AlertType = alertType,
+                    Level = level,
                     StartedAt = startedAt,
                     StartRawMessageId = raw.RawMessageId,
                 });
+            }
+            else if (existing is not null && existing.EndedAt is null && existing.Level != level && level != AirAlertLevel.Unknown)
+            {
+                existing.Level = level; // the same alert re-announced with a new level
             }
         }
         else if (existing is not null && existing.EndedAt is null)
@@ -81,6 +99,7 @@ public sealed class AlertsInUaHandler(IIndexes indexes, INormalizer normalizer, 
             SegmentText = $"{(kind == "alert.started" ? "Тривога" : "Відбій")}: {title} ({Str(alert, "alert_type")})",
             ObservedAt = at,
             EventType = kind == "alert.started" ? EventType.AirRaidAlert : EventType.AlertCancelled,
+            AlertLevel = level,
             IdentificationMethod = IdentificationMethod.Structured,
             IdentificationSource = "alerts.in.ua",
             ParserVersion = Version,
@@ -94,33 +113,104 @@ public sealed class AlertsInUaHandler(IIndexes indexes, INormalizer normalizer, 
             {
                 kind,
                 alertType = Str(alert, "alert_type"),
+                alertLevel = Str(alert, "alert_level"),
                 locationType,
                 title,
+                raion,
                 oblast,
                 placeId = place?.PlaceId,
+                placeLevel = place?.Level.ToString(),
                 sourceAlertId,
             })),
         };
         return [obs];
     }
 
+    private static PlaceLevel? LevelOf(string locationType) => locationType switch
+    {
+        "oblast" => PlaceLevel.Region,
+        "raion" => PlaceLevel.District,
+        "hromada" => PlaceLevel.Hromada,
+        _ => null,
+    };
+
+    /// <summary>
+    /// From the most precise level the feed names down to the oblast: hromada → raion → oblast, city → its hromada
+    /// polygon (the settlement lies inside it) → the settlement itself → oblast.
+    /// </summary>
+    private PlaceEntry? Resolve(string locationType, string title, string? raion, string oblast)
+    {
+        var gazetteer = indexes.Gazetteer;
+        var region = ResolveRegion(oblast) ?? ResolveRegion(title);
+        switch (locationType)
+        {
+            case "oblast":
+                return region;
+            case "raion":
+                return gazetteer.FindAdmin(PlaceLevel.District, title, region?.PlaceId) ?? region;
+            case "hromada":
+                return gazetteer.FindAdmin(PlaceLevel.Hromada, title, region?.PlaceId)
+                    ?? (raion is null ? null : gazetteer.FindAdmin(PlaceLevel.District, raion, region?.PlaceId))
+                    ?? region;
+            case "city":
+            {
+                var city = ResolveSettlement(title, region);
+                if (city is not null)
+                {
+                    return gazetteer.PolygonAt(city.Centroid.Coordinate, PlaceLevel.Hromada) ?? city;
+                }
+                return (raion is null ? null : gazetteer.FindAdmin(PlaceLevel.District, raion, region?.PlaceId)) ?? region;
+            }
+            default:
+                return region;
+        }
+    }
+
     private PlaceEntry? ResolveRegion(string title)
     {
-        if (string.IsNullOrWhiteSpace(title))
+        return Match(title)
+            .Where(p => p.Level is PlaceLevel.Region or PlaceLevel.City && p.ParentId is null)
+            .FirstOrDefault();
+    }
+
+    /// <summary>"м. Запоріжжя" → the city; the biggest settlement of that name inside the oblast wins.</summary>
+    private PlaceEntry? ResolveSettlement(string title, PlaceEntry? region)
+    {
+        var name = title.Trim();
+        foreach (var prefix in new[] { "м. ", "м.", "місто ", "смт ", "с. " })
         {
-            return null;
+            if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                name = name[prefix.Length..].Trim();
+                break;
+            }
         }
-        var normalized = normalizer.Normalize(title);
+        var candidates = Match(name).Where(p => p.Level is PlaceLevel.City or PlaceLevel.Town or PlaceLevel.Village).ToList();
+        if (region is not null)
+        {
+            var inside = candidates.Where(p => indexes.Gazetteer.RegionOf(p)?.PlaceId == region.PlaceId).ToList();
+            if (inside.Count > 0)
+            {
+                candidates = inside;
+            }
+        }
+        return candidates.OrderByDescending(p => p.Population).FirstOrDefault();
+    }
+
+    private IEnumerable<PlaceEntry> Match(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return [];
+        }
+        var normalized = normalizer.Normalize(text);
         if (normalized.Segments.Count == 0)
         {
-            return null;
+            return [];
         }
         var matcher = new PlaceMatcher(indexes.Gazetteer);
         var ctx = new ParseContext(0, "uk", null);
-        return matcher.Match(normalized.Segments[0], ctx, new HashSet<int>(), new HashSet<(int, int)>())
-            .Select(m => m.Place)
-            .Where(p => p.Level is PlaceLevel.Region or PlaceLevel.City && p.ParentId is null)
-            .FirstOrDefault();
+        return matcher.Match(normalized.Segments[0], ctx, new HashSet<int>(), new HashSet<(int, int)>()).Select(m => m.Place);
     }
 
     private static string? Str(JsonElement el, string name) =>

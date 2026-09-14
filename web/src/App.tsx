@@ -7,8 +7,6 @@ import KyivPanel from './components/KyivPanel'
 import ReplayBar from './components/ReplayBar'
 import TopBar, { type Page } from './components/TopBar'
 import TrackDetailsDrawer from './components/TrackDetailsDrawer'
-import SettingsPage from './components/settings/SettingsPage'
-import { admin } from './api/admin'
 import KyivMapView from './map/KyivMapView'
 import MapView from './map/MapView'
 import { themeIsDark, themeMapIsDark, useStore } from './store/useStore'
@@ -24,15 +22,14 @@ export default function App() {
   const setHome = useStore((s) => s.setHome)
   const panelOpen = useStore((s) => s.panelOpen)
   const setPanelOpen = useStore((s) => s.setPanelOpen)
-  const [feedOpen, setFeedOpen] = useState(() => window.innerWidth >= 1024)
+  // The feed opens folded too: a "Повідомлення (N)" button in the top-right corner unfolds it.
+  const [feedOpen, setFeedOpen] = useState(false)
   const [replay, setReplay] = useState(false)
   const [picking, setPicking] = useState(false)
   // The details panel (left) shows whichever track is selected on the map, as long as it is open.
   const [detailsOpen, setDetailsOpen] = useState(false)
-  const [settingsOpen, setSettingsOpen] = useState(() => window.location.hash === '#/settings')
   const [page, setPage] = useState<Page>(() => (window.location.hash === '#/kyiv' ? 'kyiv' : 'ukraine'))
   const regionsLoaded = useStore((s) => s.regions.length > 0)
-  const [setupHint, setSetupHint] = useState(false)
   const dark = themeIsDark(theme)
   const mapDark = themeMapIsDark(theme)
 
@@ -47,11 +44,10 @@ export default function App() {
     return () => window.clearInterval(id)
   }, [])
 
-  // Hash routes: #/settings (page over the map), #/kyiv (the Kyiv page), anything else = the country map.
+  // Hash routes: #/kyiv (the Kyiv page), anything else = the country map.
   // Back/forward and reloads keep working.
   useEffect(() => {
     const onHash = () => {
-      setSettingsOpen(window.location.hash === '#/settings')
       setPage(window.location.hash === '#/kyiv' ? 'kyiv' : 'ukraine')
     }
     window.addEventListener('hashchange', onHash)
@@ -74,20 +70,6 @@ export default function App() {
   const goPage = (p: Page) => {
     window.location.hash = p === 'kyiv' ? '#/kyiv' : ''
   }
-  const openSettings = () => {
-    window.location.hash = '#/settings'
-  }
-  const closeSettings = () => {
-    window.location.hash = ''
-  }
-
-  // First-run hint: only when the admin API is reachable (localhost or token) and no source is configured yet.
-  useEffect(() => {
-    admin
-      .status()
-      .then((st) => setSetupHint(!st.alertsConfigured && !st.telegramConfigured))
-      .catch(() => setSetupHint(false))
-  }, [settingsOpen])
 
   // Region polygons (alerts, region-level markers) and the source list (per-source filter) are loaded once.
   useEffect(() => {
@@ -151,15 +133,15 @@ export default function App() {
     : null
 
   return (
-    <div className="relative h-full w-full overflow-hidden bg-slate-100 dark:bg-slate-950" data-feed={feedOpen && !settingsOpen ? 'open' : 'closed'}>
+    <div className="relative h-full w-full overflow-hidden bg-slate-100 dark:bg-slate-950" data-feed={feedOpen ? 'open' : 'closed'}>
       {page === 'kyiv' ? <KyivMapView dark={mapDark} theme={theme} onDetails={() => setDetailsOpen(true)} /> : <MapView dark={mapDark} theme={theme} onPickHome={pickHome} onDetails={() => setDetailsOpen(true)} />}
-      <TopBar page={page} onPage={goPage} menuOpen={panelOpen} onToggleMenu={() => setPanelOpen(!panelOpen)} onOpenSettings={openSettings} onReplay={toggleReplay} replay={replay} setupHint={setupHint} />
+      <TopBar page={page} onPage={goPage} menuOpen={panelOpen} onToggleMenu={() => setPanelOpen(!panelOpen)} onReplay={toggleReplay} replay={replay} />
       {page === 'kyiv' ? (
         <KyivPanel open={panelOpen} onClose={() => setPanelOpen(false)} />
       ) : (
         <FilterPanel open={panelOpen} onClose={() => setPanelOpen(false)} picking={picking} onPickingChange={setPicking} onReplay={() => !replay && toggleReplay()} />
       )}
-      {!panelOpen && !settingsOpen && !detailsOpen && (
+      {!panelOpen && !detailsOpen && (
         <button
           className="pointer-events-auto absolute left-3 top-14 z-10 hidden rounded-lg bg-white/95 px-3 py-1.5 text-sm shadow md:block dark:bg-slate-900/95 dark:text-slate-100"
           onClick={() => setPanelOpen(true)}
@@ -168,10 +150,9 @@ export default function App() {
           ☰ Фільтри
         </button>
       )}
-      {replay && !settingsOpen && <ReplayBar onClose={toggleReplay} />}
-      {!settingsOpen && <FeedPanel open={feedOpen} onToggle={() => setFeedOpen((o) => !o)} />}
-      {detailsOpen && !settingsOpen && <TrackDetailsDrawer onClose={() => setDetailsOpen(false)} />}
-      {settingsOpen && <SettingsPage onClose={closeSettings} />}
+      {replay && <ReplayBar onClose={toggleReplay} />}
+      <FeedPanel open={feedOpen} onToggle={() => setFeedOpen((o) => !o)} />
+      {detailsOpen && <TrackDetailsDrawer onClose={() => setDetailsOpen(false)} />}
       {selectedTrackId && !selectedTrack && !detailsOpen && (
         <div className="pointer-events-auto absolute bottom-3 left-1/2 z-20 -translate-x-1/2 rounded bg-white/90 px-3 py-1 text-xs shadow dark:bg-slate-900/90 dark:text-slate-100">
           Трек більше не відображається.{' '}
