@@ -83,6 +83,7 @@ Production: `cp .env.example deploy/.env`, заповнити токени, `doc
 | `Correlation__{AttachThreshold,SlackKm,DuplicateWindow,CloseAfterWindows}` | 0.6, 30, 3 хв, 2 | кореляція (див. нижче) |
 | `Processing__{MaxAttempts,PendingPollInterval}` | 3, 10 с | повтори обробки, sweeper |
 | `Collectors__Telegram__BackfillSince` | — | одноразове дочитування всієї історії каналів від дати з перебудовою похідного |
+| `Collectors__AlertsInUa__BackfillPeriod` | — | одноразове дочитування історії тривог по всіх областях (`month_ago`/`week_ago`) |
 | `Llm__MaxMessageAgeHours` | 72 | старіші повідомлення до моделі не йдуть (перебудова історії — лише правила) |
 | `Seed__DataDirectory` | `data` | шукається вгору від content root |
 
@@ -99,6 +100,12 @@ Production: `cp .env.example deploy/.env`, заповнити токени, `doc
 **alerts.in.ua.** Токен видають за запитом на alerts.in.ua/api-request. Колектор опитує `active.json` кожні 30 с; кожен
 початок і кінець тривоги стає окремим `RawMessage`; поточний набір активних тривог зберігається в `collector_states.cursor`,
 тому «кінці», що сталися під час простою Worker-а, дописуються після рестарту.
+Історія: `Collectors:AlertsInUa:BackfillPeriod` = `month_ago` (глибше API не дає) або `week_ago` — `AlertsInUaHistoryCollector`
+один раз обходить `/v1/regions/{uid}/alerts/{period}.json` по всіх 27 областях (2 запити/хв — ~15 хв) і кладе кожну закриту
+тривогу тими самими парами `{id}:start`/`{id}:end`, що й live-колектор (дублікати відкидає унікальність `source_message_id`);
+повідомлення лягають Pending без сигналу — sweeper обробляє їх у порядку публікації. Прогрес і завершення — у `app_settings`
+`Runtime:AlertsInUa:History` (список областей done, `completedAt`); повторно той самий період не вантажиться — щоб перечитати,
+змініть період або видаліть ключ. Історія повертає тривоги того рівня, який область публікує (Київська — райони).
 
 **Telegram — це не бот.** Бот бачить лише чати, куди його додав адміністратор, і не читає публічні канали ПС ЗСУ чи ОВА.
 Тому використовується сесія звичайного акаунта (WTelegramClient, MTProto), яка підписується на канали як Telegram Desktop:

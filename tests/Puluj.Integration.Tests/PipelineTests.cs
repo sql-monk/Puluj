@@ -148,6 +148,94 @@ public sealed class PipelineTests : IAsyncLifetime
         }
     }
 
+    [Fact]
+    public async Task Alert_end_handled_before_its_start_still_closes_the_interval()
+    {
+        if (_services is null)
+        {
+            return;
+        }
+        var factory = _services.GetRequiredService<IDbContextFactory<PulujDbContext>>();
+        var ingestor = _services.GetRequiredService<RawMessageIngestor>();
+        var processor = _services.GetRequiredService<RawMessageProcessor>();
+        int sourceId;
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            sourceId = await db.Sources.Where(s => s.Code == "alerts_in_ua").Select(s => s.SourceId).SingleAsync();
+        }
+        var startedAt = Ms(DateTimeOffset.UtcNow.AddHours(-2)); // timestamptz keeps microseconds, not .NET ticks
+        var endedAt = startedAt.AddMinutes(40);
+        var alertJson = "{\"id\":777,\"alert_type\":\"air_raid\",\"location_type\":\"oblast\",\"location_title\":\"Київська область\","
+                        + "\"location_oblast\":\"Київська область\",\"started_at\":\"" + startedAt.ToString("O") + "\"}";
+        var start = await ingestor.IngestAsync(Alert(sourceId, "777:start", startedAt, "alert.started", alertJson), "alerts_in_ua", CancellationToken.None);
+        var end = await ingestor.IngestAsync(Alert(sourceId, "777:end", endedAt, "alert.finished", alertJson), "alerts_in_ua", CancellationToken.None);
+
+        // A rebuild replays the start hours after the live end was handled: the end must not be lost.
+        Assert.Equal(1, await processor.ProcessAsync(end.RawMessageId!.Value, CancellationToken.None));
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            var a = await db.AirAlerts.SingleAsync(x => x.SourceAlertId == "777");
+            Assert.Equal(startedAt, a.StartedAt);
+            Assert.Equal(endedAt, a.EndedAt);
+            Assert.Null(a.StartRawMessageId);
+        }
+        Assert.Equal(1, await processor.ProcessAsync(start.RawMessageId!.Value, CancellationToken.None));
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            var a = await db.AirAlerts.SingleAsync(x => x.SourceAlertId == "777");
+            Assert.Equal(endedAt, a.EndedAt); // still closed
+            Assert.Equal(start.RawMessageId, a.StartRawMessageId);
+        }
+    }
+
+    [Fact]
+    public async Task History_alert_start_with_finished_at_is_stored_closed()
+    {
+        if (_services is null)
+        {
+            return;
+        }
+        var factory = _services.GetRequiredService<IDbContextFactory<PulujDbContext>>();
+        var ingestor = _services.GetRequiredService<RawMessageIngestor>();
+        var processor = _services.GetRequiredService<RawMessageProcessor>();
+        int sourceId;
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            sourceId = await db.Sources.Where(s => s.Code == "alerts_in_ua").Select(s => s.SourceId).SingleAsync();
+        }
+        var startedAt = Ms(DateTimeOffset.UtcNow.AddDays(-20));
+        var endedAt = startedAt.AddMinutes(25);
+        // The history endpoint returns the whole alert, so the start message already knows when it ended.
+        var alertJson = "{\"id\":778,\"alert_type\":\"air_raid\",\"location_type\":\"oblast\",\"location_title\":\"Кіровоградська область\","
+                        + "\"location_oblast\":\"Кіровоградська область\",\"started_at\":\"" + startedAt.ToString("O") + "\",\"finished_at\":\"" + endedAt.ToString("O") + "\"}";
+        var start = await ingestor.IngestAsync(Alert(sourceId, "778:start", startedAt, "alert.started", alertJson), "alerts_in_ua", CancellationToken.None);
+        var end = await ingestor.IngestAsync(Alert(sourceId, "778:end", endedAt, "alert.finished", alertJson), "alerts_in_ua", CancellationToken.None);
+
+        Assert.Equal(1, await processor.ProcessAsync(start.RawMessageId!.Value, CancellationToken.None));
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            var a = await db.AirAlerts.SingleAsync(x => x.SourceAlertId == "778");
+            Assert.Equal(endedAt, a.EndedAt); // never open, so the map is not flashed with a month-old alert
+        }
+        Assert.Equal(1, await processor.ProcessAsync(end.RawMessageId!.Value, CancellationToken.None));
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            var a = await db.AirAlerts.SingleAsync(x => x.SourceAlertId == "778");
+            Assert.Equal(endedAt, a.EndedAt);
+            Assert.Equal(end.RawMessageId, a.EndRawMessageId);
+        }
+    }
+
+    private static DateTimeOffset Ms(DateTimeOffset t) => t.AddTicks(-(t.Ticks % TimeSpan.TicksPerMillisecond));
+
+    private static IncomingMessage Alert(int sourceId, string id, DateTimeOffset at, string kind, string alertJson) => new()
+    {
+        SourceId = sourceId,
+        SourceMessageId = id,
+        PublishedAt = at,
+        RawPayload = JsonDocument.Parse($"{{\"kind\":\"{kind}\",\"at\":\"{at:O}\",\"alert\":{alertJson}}}"),
+    };
+
     private static IncomingMessage Msg(int sourceId, string id, DateTimeOffset at, string text) => new()
     {
         SourceId = sourceId,

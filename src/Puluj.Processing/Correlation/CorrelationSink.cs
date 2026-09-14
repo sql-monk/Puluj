@@ -208,6 +208,12 @@ public sealed class CorrelationSink(
             {
                 continue;
             }
+            // A cancellation ends what was in the air at that moment: a replayed old "відбій" (history load,
+            // out-of-order sweep) must not close a track seen after it.
+            if (t.LastSeenAt > o.ObservedAt)
+            {
+                continue;
+            }
             t.Status = TrackStatus.Cancelled;
             t.ClosedReason = reason;
             t.UpdatedAt = Later(t.UpdatedAt, o.ObservedAt);

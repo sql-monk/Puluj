@@ -28,6 +28,7 @@ public static class DependencyInjection
         if (names is null || names.Contains(CollectorNames.AlertsInUa))
         {
             services.AddSingleton<ICollector, AlertsInUaCollector>();
+            services.AddSingleton<ICollector, AlertsInUaHistoryCollector>(); // idle unless Collectors:AlertsInUa:BackfillPeriod is set
         }
         if (names is null || names.Contains(CollectorNames.Telegram))
         {

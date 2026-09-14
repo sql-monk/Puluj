@@ -15,6 +15,8 @@ namespace Puluj.Processing.Structured;
 /// maintains AirAlert intervals and emits AirRaidAlert / AlertCancelled targets without any NLP.
 /// The alert is pinned to the place of the level the feed names — oblast, raion, hromada or city — so the map
 /// colours exactly the polygon that is under alert (raions and hromadas come from COD-AB, see GazetteerSeeder).
+/// Start and end may arrive in either order (a rebuild replays the start hours after the live end was handled):
+/// an end without a start stores the closed interval from the payload, a start that finds it only fills in its message.
 /// </summary>
 public sealed class AlertsInUaHandler(IIndexes indexes, INormalizer normalizer, ILogger<AlertsInUaHandler> logger)
 {
@@ -64,11 +66,14 @@ public sealed class AlertsInUaHandler(IIndexes indexes, INormalizer normalizer, 
         }
 
         var existing = await db.AirAlerts.FirstOrDefaultAsync(a => a.SourceId == source.SourceId && a.SourceAlertId == sourceAlertId, ct);
+        var startedAt = DateTimeOffset.TryParse(Str(alert, "started_at"), out var s) ? s : at;
+        // A history load carries the whole alert in the start message too: store it closed straight away, so an old
+        // alert never shows up open on the map for the seconds between its start and end being processed.
+        var finishedAt = DateTimeOffset.TryParse(Str(alert, "finished_at"), out var f) ? f : (DateTimeOffset?)null;
         if (kind == "alert.started")
         {
             if (existing is null && place is not null)
             {
-                var startedAt = DateTimeOffset.TryParse(Str(alert, "started_at"), out var s) ? s : at;
                 db.AirAlerts.Add(new AirAlert
                 {
                     SourceId = source.SourceId,
@@ -78,17 +83,40 @@ public sealed class AlertsInUaHandler(IIndexes indexes, INormalizer normalizer, 
                     Level = level,
                     StartedAt = startedAt,
                     StartRawMessageId = raw.RawMessageId,
+                    EndedAt = finishedAt,
                 });
             }
-            else if (existing is not null && existing.EndedAt is null && existing.Level != level && level != AirAlertLevel.Unknown)
+            else if (existing is not null)
             {
-                existing.Level = level; // the same alert re-announced with a new level
+                existing.StartRawMessageId ??= raw.RawMessageId; // the end came first
+                if (existing.EndedAt is null && existing.Level != level && level != AirAlertLevel.Unknown)
+                {
+                    existing.Level = level; // the same alert re-announced with a new level
+                }
             }
         }
-        else if (existing is not null && existing.EndedAt is null)
+        else if (existing is not null)
         {
-            existing.EndedAt = at;
-            existing.EndRawMessageId = raw.RawMessageId;
+            if (existing.EndedAt is null)
+            {
+                existing.EndedAt = at;
+            }
+            existing.EndRawMessageId ??= raw.RawMessageId;
+        }
+        else if (place is not null)
+        {
+            // End before start: the payload carries the whole alert, so the interval is complete without the start message.
+            db.AirAlerts.Add(new AirAlert
+            {
+                SourceId = source.SourceId,
+                SourceAlertId = sourceAlertId,
+                PlaceId = place.PlaceId,
+                AlertType = alertType,
+                Level = level,
+                StartedAt = startedAt,
+                EndedAt = at,
+                EndRawMessageId = raw.RawMessageId,
+            });
         }
 
         var obs = new Target

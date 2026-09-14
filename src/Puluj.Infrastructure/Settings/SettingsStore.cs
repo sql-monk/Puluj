@@ -21,7 +21,7 @@ public sealed class SettingsStore(IDbContextFactory<PulujDbContext> factory, Tim
     /// <summary>Keys the admin UI may write. Anything else is rejected so the UI cannot rewrite arbitrary configuration.</summary>
     public static readonly HashSet<string> EditableKeys = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Collectors:AlertsInUa:Enabled", "Collectors:AlertsInUa:Token",
+        "Collectors:AlertsInUa:Enabled", "Collectors:AlertsInUa:Token", "Collectors:AlertsInUa:BackfillPeriod",
         "Collectors:Telegram:Enabled", "Collectors:Telegram:ApiId", "Collectors:Telegram:ApiHash", "Collectors:Telegram:Phone",
         "Collectors:Telegram:Password", "Collectors:Telegram:VerificationCode", "Collectors:Telegram:AutoJoin", "Collectors:Telegram:BackfillLimit",
         "Collectors:Telegram:BackfillSince",

@@ -2,11 +2,13 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Puluj.Domain.Entities;
 using Puluj.Domain.Enums;
 using Puluj.Infrastructure.Ingestion;
+using Puluj.Infrastructure.Persistence;
 
 namespace Puluj.Collectors.AlertsInUa;
 
@@ -14,12 +16,15 @@ namespace Puluj.Collectors.AlertsInUa;
 /// Polls alerts.in.ua active alerts and turns every state change into a RawMessage:
 /// kind=alert.started (payload = alert object) / kind=alert.finished. The current active set is kept in
 /// CollectorState.Cursor so ends that happened while the worker was down are still emitted after restart.
+/// Alerts still open in the database that the feed no longer lists (injected by hand, or left behind by a rebuild)
+/// get an end too, so the feed is the single authority on what is active.
 /// </summary>
 public sealed class AlertsInUaCollector(
     IHttpClientFactory httpFactory,
     IOptionsMonitor<AlertsInUaOptions> options,
     RawMessageIngestor ingestor,
     CollectorStateStore states,
+    IDbContextFactory<PulujDbContext> factory,
     TimeProvider clock,
     ILogger<AlertsInUaCollector> logger) : ICollector
 {
@@ -113,24 +118,60 @@ public sealed class AlertsInUaCollector(
         }
         foreach (var (id, alert) in known)
         {
-            if (active.ContainsKey(id))
+            if (!active.ContainsKey(id))
             {
-                continue;
+                await EndAsync(source, id, alert, now, ct);
             }
-            await ingestor.IngestAsync(new IncomingMessage
+        }
+        // Open in the database but neither active nor known: not ours to have started (dev/ingest), or a rebuild handled
+        // the live end before it got to the start. The `{id}:end` message is idempotent, so a repeat is a no-op.
+        foreach (var (id, alert) in await OpenInDatabaseAsync(source.SourceId, ct))
+        {
+            if (!active.ContainsKey(id) && !known.ContainsKey(id) && (await EndAsync(source, id, alert, now, ct)).IsNew)
             {
-                SourceId = source.SourceId,
-                SourceMessageId = $"{id}:end",
-                PublishedAt = now,
-                RawPayload = Wrap("alert.finished", alert, now),
-                Url = "https://alerts.in.ua/",
-            }, source.Code, ct);
+                logger.LogInformation("alerts.in.ua: alert {Id} is open in the database but not in the feed; ended it", id);
+            }
         }
 
         var cursor = new JsonObject { ["active"] = new JsonArray(active.Values.Select(a => (JsonNode)a.DeepClone()).ToArray()) };
         await states.MarkSuccessAsync(source.SourceId, null, active.Count == 0 ? null : now,
             JsonDocument.Parse(cursor.ToJsonString()), ct);
         return active;
+    }
+
+    private Task<IngestResult> EndAsync(Source source, string id, JsonObject alert, DateTimeOffset now, CancellationToken ct) =>
+        ingestor.IngestAsync(new IncomingMessage
+        {
+            SourceId = source.SourceId,
+            SourceMessageId = $"{id}:end",
+            PublishedAt = now,
+            RawPayload = Wrap("alert.finished", alert, now),
+            Url = "https://alerts.in.ua/",
+        }, source.Code, ct);
+
+    /// <summary>Alerts without an end in the database, with the alert object of their start message (the id alone when there is none).</summary>
+    private async Task<List<(string Id, JsonObject Alert)>> OpenInDatabaseAsync(int sourceId, CancellationToken ct)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var rows = await db.AirAlerts.AsNoTracking()
+            .Where(a => a.SourceId == sourceId && a.EndedAt == null)
+            .Select(a => new
+            {
+                a.SourceAlertId,
+                a.StartedAt,
+                Payload = db.RawMessages.Where(r => r.RawMessageId == a.StartRawMessageId).Select(r => r.RawPayload).FirstOrDefault(),
+            })
+            .ToListAsync(ct);
+        var result = new List<(string, JsonObject)>();
+        foreach (var row in rows)
+        {
+            var alert = row.Payload is not null && row.Payload.RootElement.TryGetProperty("alert", out var el)
+                        && JsonNode.Parse(el.GetRawText()) is JsonObject obj
+                ? obj
+                : new JsonObject { ["id"] = row.SourceAlertId, ["started_at"] = row.StartedAt.ToString("O") };
+            result.Add((row.SourceAlertId, alert));
+        }
+        return result;
     }
 
     private async Task<Dictionary<string, JsonObject>> LoadKnownAsync(int sourceId, CancellationToken ct)
