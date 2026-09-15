@@ -2,13 +2,14 @@ import { useCallback, useEffect, useState } from 'react'
 import { admin, AdminError, getAdminToken, setAdminToken, type AdminSourceDto, type AdminStatusDto, type SettingDto } from '../api/admin'
 import { Badge, Field, findSetting, Section, Toggle, type Draft } from '../components/settings/fields'
 import SourceRatingPanel from '../components/settings/SourceRatingPanel'
+import AnalyticsPanel from '../components/analytics/AnalyticsPanel'
 import SourcesEditor from '../components/settings/SourcesEditor'
 import { CollectorsPanel, DbPanel, LogsPanel, OverviewPanel, ProcessingPanel } from './OpsPanels'
 
 /** Where the public map lives (another service, another port); overridable at build time. */
 const MAP_URL: string = (import.meta.env.VITE_MAP_URL as string | undefined) ?? `${window.location.protocol}//${window.location.hostname}:5257/`
 
-type SectionId = 'overview' | 'collectors' | 'processing' | 'db' | 'logs' | 'sources' | 'rating' | 'alerts' | 'telegram' | 'llm' | 'system'
+type SectionId = 'overview' | 'collectors' | 'processing' | 'db' | 'logs' | 'analytics' | 'sources' | 'rating' | 'alerts' | 'telegram' | 'llm' | 'system'
 
 const NAV: { id: SectionId; label: string; group: string }[] = [
   { id: 'overview', label: 'Стан', group: 'Моніторинг' },
@@ -16,6 +17,7 @@ const NAV: { id: SectionId; label: string; group: string }[] = [
   { id: 'processing', label: 'Обробка', group: 'Моніторинг' },
   { id: 'db', label: 'База даних', group: 'Моніторинг' },
   { id: 'logs', label: 'Логи', group: 'Моніторинг' },
+  { id: 'analytics', label: 'Хто кого копіює', group: 'Аналітика' },
   { id: 'sources', label: 'Джерела', group: 'Налаштування' },
   { id: 'rating', label: 'Рейтинг джерел', group: 'Налаштування' },
   { id: 'alerts', label: 'alerts.in.ua', group: 'Налаштування' },
@@ -128,7 +130,7 @@ export default function AdminApp() {
       ) : (
         <div className="flex min-h-0 flex-1">
           <nav className="w-44 shrink-0 border-r border-slate-200 bg-white p-2 text-sm dark:border-slate-700 dark:bg-slate-900">
-            {['Моніторинг', 'Налаштування'].map((group) => (
+            {['Моніторинг', 'Аналітика', 'Налаштування'].map((group) => (
               <div key={group} className="mb-2">
                 <div className="px-3 pb-1 pt-2 text-[10px] uppercase tracking-wide text-slate-400">{group}</div>
                 {NAV.filter((n) => n.group === group).map((n) => (
@@ -148,6 +150,7 @@ export default function AdminApp() {
                 {section === 'processing' && <ProcessingPanel />}
                 {section === 'db' && <DbPanel />}
                 {section === 'logs' && <LogsPanel />}
+                {section === 'analytics' && <AnalyticsPanel />}
                 {section === 'sources' && <SourcesEditor sources={sources} reload={load} notify={setMessage} />}
                 {section === 'rating' && <SourceRatingPanel />}
                 {section === 'alerts' && <AlertsSection {...props} />}

@@ -4,6 +4,7 @@ import { api } from '../api/client'
 import type { AlertDto, PredecessorsDto, DisplayMode, TargetDto, RegionDto, SourceDto, TrackDto } from '../api/types'
 import type { Home } from '../eta/computeEta'
 import { getPalette, type MapPalette } from '../map/palette'
+import { defaultMapConfig, mergeTargets, mergeTracks, nearestLifetime, pruneTracks, type MapConfig } from './liveWindow'
 
 export type Mode = 'live' | 'history'
 export type Theme = 'light' | 'sepia' | 'graphite' | 'dark' | 'midnight' | 'olive'
@@ -62,6 +63,8 @@ interface State {
   alerts: Record<number, AlertDto>
   regions: RegionDto[]
   sources: SourceDto[]
+  /** The live windows the server works with (lifetime choices, feed depth); defaults until /api/map/config answers. */
+  mapConfig: MapConfig
   mode: Mode
   at: Date | null
   now: Date
@@ -87,8 +90,12 @@ interface State {
 
   setSnapshot: (tracks: TrackDto[], alerts: AlertDto[]) => void
   upsertTrack: (t: TrackDto) => void
+  /** A batch of hub updates in one store change (the hub is flushed every few hundred ms). Tracks outside the window are dropped. */
+  upsertTracks: (list: TrackDto[]) => void
   upsertAlert: (a: AlertDto) => void
+  upsertAlerts: (list: AlertDto[]) => void
   setRegions: (r: RegionDto[]) => void
+  setMapConfig: (c: MapConfig) => void
   setSources: (s: SourceDto[]) => void
   setMode: (mode: Mode, at?: Date | null) => void
   tick: () => void
@@ -101,6 +108,8 @@ interface State {
   selectLink: (link: SelectedLink | null) => void
   setTargets: (list: TargetDto[]) => void
   addTarget: (o: TargetDto) => void
+  /** A batch of new reports for the feed; those outside the feed window are dropped. */
+  addTargets: (list: TargetDto[]) => void
   selectRegion: (id: number | null) => void
   loadPredecessors: (trackId: number | null) => void
   ensurePlaceGeometry: (placeId: number) => void
@@ -154,6 +163,7 @@ export const useStore = create<State>((set, get) => ({
   alerts: {},
   regions: [],
   sources: [],
+  mapConfig: defaultMapConfig,
   mode: 'live',
   at: null,
   now: new Date(),
@@ -178,20 +188,46 @@ export const useStore = create<State>((set, get) => ({
       tracks: Object.fromEntries(tracks.map((t) => [t.id, t])),
       alerts: Object.fromEntries(alerts.map((a) => [a.id, a])),
     }),
-  upsertTrack: (t) => set((s) => (s.mode === 'live' ? { tracks: { ...s.tracks, [t.id]: t } } : {})),
-  upsertAlert: (a) =>
+  upsertTrack: (t) => get().upsertTracks([t]),
+  upsertTracks: (list) =>
     set((s) => {
-      if (s.mode !== 'live') return {}
+      if (s.mode !== 'live' || list.length === 0) return {}
+      const tracks = mergeTracks(s.tracks, list, new Date(), s.mapConfig)
+      return tracks === s.tracks ? {} : { tracks }
+    }),
+  upsertAlert: (a) => get().upsertAlerts([a]),
+  upsertAlerts: (list) =>
+    set((s) => {
+      if (s.mode !== 'live' || list.length === 0) return {}
       const alerts = { ...s.alerts }
-      if (a.endedAt) delete alerts[a.id]
-      else alerts[a.id] = a
+      for (const a of list) {
+        if (a.endedAt) delete alerts[a.id]
+        else alerts[a.id] = a
+      }
       return { alerts }
     }),
   setRegions: (regions) => set({ regions }),
+  setMapConfig: (mapConfig) =>
+    set((s) => {
+      // A remembered lifetime the server no longer offers snaps to the closest option.
+      const lifetime = nearestLifetime(s.filters.lifetimeMinutes, mapConfig.lifetimeOptionsMinutes)
+      if (lifetime === s.filters.lifetimeMinutes) return { mapConfig }
+      const filters = { ...s.filters, lifetimeMinutes: lifetime }
+      save(FILTERS_KEY, filters)
+      return { mapConfig, filters }
+    }),
   setSources: (sources) => set({ sources }),
   // Scrubbing inside history keeps the selected track; crossing live<->history drops it (ids may not exist there).
   setMode: (mode, at = null) => set((s) => ({ mode, at, selectedTrackId: s.mode === mode ? s.selectedTrackId : null })),
-  tick: () => set({ now: new Date() }),
+  // Besides the clock, the tick drops what fell out of the live window, so a long session does not keep every
+  // track it ever received (in history the store is frozen at `at`).
+  tick: () =>
+    set((s) => {
+      const now = new Date()
+      if (s.mode !== 'live') return { now }
+      const tracks = pruneTracks(s.tracks, now, s.mapConfig)
+      return tracks === s.tracks ? { now } : { now, tracks }
+    }),
   setConnection: (connection) => set({ connection }),
   setFilter: (key, value) =>
     set((s) => {
@@ -237,14 +273,20 @@ export const useStore = create<State>((set, get) => ({
       .finally(() => pendingGeometries.delete(placeId))
   },
   setTargets: (targets) => set({ targets }),
-  addTarget: (o) =>
-    set((s) => (s.mode === 'live' && !s.targets.some((x) => x.id === o.id) ? { targets: [o, ...s.targets].slice(0, 500) } : {})),
+  addTarget: (o) => get().addTargets([o]),
+  addTargets: (list) =>
+    set((s) => {
+      if (s.mode !== 'live' || list.length === 0) return {}
+      const targets = mergeTargets(s.targets, list, new Date(), s.mapConfig)
+      return targets === s.targets ? {} : { targets }
+    }),
   selectRegion: (selectedRegionId) => set({ selectedRegionId }),
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error }),
 }))
 
-if (import.meta.env.DEV) Object.assign(window, { __store: useStore })
+// Exposed for dev-time scripting (Playwright); the store module is also loaded by node-side tests, where there is no window.
+if (import.meta.env.DEV && typeof window !== 'undefined') Object.assign(window, { __store: useStore })
 
 export function displayModeEnabled(mode: DisplayMode, f: Filters): boolean {
   switch (mode) {

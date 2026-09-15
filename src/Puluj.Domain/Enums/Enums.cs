@@ -14,6 +14,8 @@ public enum ProcessingStatus
     Processed = 1,
     Failed = 2,
     Skipped = 3,
+    /// <summary>Claimed by a processor instance (claimed_by / claimed_at); goes back to Pending when the claim lease expires.</summary>
+    InProgress = 4,
 }
 
 /// <summary>How precise the location of an target is. Never upgrade a vague text to a Point.</summary>

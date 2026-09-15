@@ -13,9 +13,13 @@ namespace Puluj.Processing;
 
 public static class DependencyInjection
 {
-    public static IServiceCollection AddPulujProcessing(this IServiceCollection services, IConfiguration configuration)
+    /// <param name="instanceName">Name this processor writes into raw_messages.claimed_by; unique per running instance
+    /// (WorkerOptions.InstanceName). Defaults to the machine name.</param>
+    public static IServiceCollection AddPulujProcessing(this IServiceCollection services, IConfiguration configuration, string? instanceName = null)
     {
         services.Configure<ProcessingOptions>(configuration.GetSection(ProcessingOptions.Section));
+        services.AddSingleton(new ProcessorIdentity(instanceName ?? Environment.MachineName));
+        services.AddSingleton<RawMessageClaims>();
 
         services.AddSingleton<IndexProvider>();
         services.AddSingleton<IIndexes>(sp => sp.GetRequiredService<IndexProvider>());

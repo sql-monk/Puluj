@@ -3,6 +3,7 @@ using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using Puluj.Admin;
+using Puluj.Analytics;
 using Puluj.Api;
 using Puluj.Api.Services;
 using Puluj.Infrastructure;
@@ -26,6 +27,7 @@ builder.Services.AddOpenTelemetry()
     .WithMetrics(m => m.AddAspNetCoreInstrumentation().AddRuntimeInstrumentation().AddMeter(PulujMetrics.MeterName).AddOtlpExporter());
 
 builder.Services.AddPulujInfrastructure(builder.Configuration);
+builder.Services.AddPulujAnalyticsReporting(builder.Configuration);
 builder.Services.ConfigureHttpJsonOptions(o => ApiDependencyInjection.ConfigureJson(o.SerializerOptions));
 builder.Services.AddProblemDetails();
 builder.Services.AddHttpClient("admin-test");
@@ -55,12 +57,15 @@ if (app.Environment.IsDevelopment())
 app.MapHealthChecks("/api/health", new HealthCheckOptions { ResponseWriter = HealthResponseWriter.WriteAsync });
 app.MapAdminEndpoints();
 app.MapOpsEndpoints();
+app.MapAnalyticsEndpoints();
 
 // The admin SPA is built as admin.html (second Vite entry of the shared web/ code base).
 app.UseDefaultFiles(new DefaultFilesOptions { DefaultFileNames = ["admin.html"] });
 app.UseStaticFiles();
 app.MapFallbackToFile("admin.html");
 
+// Not a request is answered until the worker has brought the schema up to this code's model (SchemaReadiness).
+await Puluj.Infrastructure.Persistence.SchemaReadiness.WaitForMigrationsAsync(app.Services, app.Logger, app.Lifetime.ApplicationStopping);
 app.Run();
 
 public partial class Program;

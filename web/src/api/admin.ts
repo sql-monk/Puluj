@@ -161,6 +161,11 @@ export class AdminError extends Error {
   }
 }
 
+/** Shared by the other admin-side clients (api/analytics.ts). */
+export async function adminCall<T>(method: string, path: string, body?: unknown, extraHeaders?: Record<string, string>): Promise<T> {
+  return call<T>(method, path, body, extraHeaders)
+}
+
 async function call<T>(method: string, path: string, body?: unknown, extraHeaders?: Record<string, string>): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json', ...extraHeaders }
   const token = getAdminToken()

@@ -10,8 +10,8 @@ namespace Puluj.Infrastructure.Ingestion;
 
 /// <summary>
 /// Stores a RawMessage exactly once (spec §5 idempotency: unique (source, source_message_id) and unique hash),
-/// records source latency and wakes the processing loop through NOTIFY, so collectors and the processor may live in
-/// different processes (the Pending sweep in ProcessingLoop covers a lost notification).
+/// records source latency and wakes the processors through NOTIFY, so collectors and the processors may live in
+/// different processes (a processor's poll for Pending rows covers a lost notification).
 /// </summary>
 public sealed class RawMessageIngestor(
     IDbContextFactory<PulujDbContext> factory,
@@ -20,8 +20,8 @@ public sealed class RawMessageIngestor(
     TimeProvider clock,
     ILogger<RawMessageIngestor> logger)
 {
-    /// <param name="enqueue">False while a history load is running: the message is stored Pending and the sweeper
-    /// picks it up later in publication order, together with everything else the load brings.</param>
+    /// <param name="enqueue">False while a history load is running: the message is stored Pending and the processors
+    /// pick it up later in publication order, together with everything else the load brings.</param>
     public async Task<IngestResult> IngestAsync(IncomingMessage msg, string sourceCode, CancellationToken ct, bool enqueue = true)
     {
         var receivedAt = clock.GetUtcNow();

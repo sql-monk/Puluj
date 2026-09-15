@@ -22,6 +22,10 @@ public class RawMessage
     public ProcessingStatus ProcessingStatus { get; set; } = ProcessingStatus.Pending;
     public DateTimeOffset? ProcessedAt { get; set; }
     public int Attempts { get; set; }
+    /// <summary>Processor instance that took the message (kept after processing as provenance); null while Pending.</summary>
+    public string? ClaimedBy { get; set; }
+    /// <summary>When it was taken; an InProgress claim older than the lease is returned to Pending by any instance.</summary>
+    public DateTimeOffset? ClaimedAt { get; set; }
 
     public ICollection<Target> Targets { get; set; } = [];
 }

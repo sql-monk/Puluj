@@ -49,9 +49,18 @@ public sealed record TrackDto(
 
 /// <param name="Level">Unknown | Yellow | Red (regional administrations publish levels; alerts.in.ua does not).</param>
 /// <param name="Location">Where to draw it when the place has no polygon (raion towns): point + radius.</param>
-public sealed record AlertDto(long Id, int PlaceId, string PlaceName, string AlertType, string Level, DateTimeOffset StartedAt, DateTimeOffset? EndedAt, LocationDto? Location);
+/// <param name="AncestorIds">The place's parents, nearest first, up to the root (`[raion, oblast]` for a hromada, `[oblast]`
+/// for a raion, empty for an oblast or Kyiv): the client tells from these which alerts cover a place and which lie inside it.</param>
+public sealed record AlertDto(long Id, int PlaceId, string PlaceName, string AlertType, string Level, DateTimeOffset StartedAt, DateTimeOffset? EndedAt, LocationDto? Location, IReadOnlyList<int> AncestorIds);
 
 public sealed record SnapshotDto(DateTimeOffset At, bool Historical, IReadOnlyList<TrackDto> Tracks, IReadOnlyList<AlertDto> Alerts);
+
+/// <summary>
+/// The live map's time windows (GET /api/map/config), so the client and the server agree on what is still on the map:
+/// the lifetime choices of the panel (the largest one is the window of the live snapshot and of track pushes) and the
+/// window of the feed.
+/// </summary>
+public sealed record MapConfigDto(IReadOnlyList<int> LifetimeOptionsMinutes, int MaxLifetimeMinutes, double FeedHours);
 
 /// <summary>One reported position of a track in a replay window: where it was said to be, when, and on what course.</summary>
 public sealed record ReplaySampleDto(DateTimeOffset At, Point Point, double? DirectionDeg, bool Approach);
@@ -133,3 +142,37 @@ public sealed record TimelineBucketDto(DateTimeOffset From, int Targets, int Tra
 
 /// <summary>Development-only: inject a message as a collector would. Payload (optional) is stored as RawPayload, e.g. an alerts.in.ua alert.</summary>
 public sealed record IngestRequest(string SourceCode, string? Text, DateTimeOffset? PublishedAt, string? SourceMessageId, System.Text.Json.JsonElement? Payload);
+
+// Statistics page (GET /api/stats): one payload with every section, aggregated for one period. Same for every viewer.
+public sealed record StatsTotalsDto(int Targets, int Tracks, long ObjectsDeclared, int Alerts, double AlertHours, int Messages, int MessagesProcessed, int MessagesWithTargets, int ActiveSources);
+public sealed record StatsCategoryDto(string Code, string Name);
+/// <summary>One time bucket; Targets / Tracks are counts per category, in the order of StatsDto.Categories.</summary>
+public sealed record StatsBucketDto(DateTimeOffset At, IReadOnlyList<int> Targets, IReadOnlyList<int> Tracks, int Alerts, double AlertHours);
+public sealed record StatsClassDto(string Code, string Name, string CategoryCode, int Targets, int Tracks, long ObjectsDeclared);
+/// <summary>Targets located in a region (oblast, named area…); Id is null for the folded "other" row.</summary>
+public sealed record StatsRegionDto(int? Id, string Name, int Targets);
+public sealed record StatsRouteDto(int FromId, string FromName, int ToId, string ToName, int Count);
+public sealed record StatsSliceDto(string Key, string Label, int Count);
+public sealed record StatsAlertRegionDto(int Id, string Name, int Count, double Hours);
+/// <summary>Series: messages per bucket, aligned with StatsDto.BucketStarts.</summary>
+public sealed record StatsSourceDto(int Id, string Code, string Name, int Messages, int Processed, int WithTargets, int Targets, double? MedianLagSeconds, IReadOnlyList<int> Series);
+public sealed record StatsDto(
+    DateTimeOffset From,
+    DateTimeOffset To,
+    string Bucket,
+    IReadOnlyList<DateTimeOffset> BucketStarts,
+    StatsTotalsDto Totals,
+    IReadOnlyList<StatsCategoryDto> Categories,
+    IReadOnlyList<StatsBucketDto> Timeline,
+    IReadOnlyList<StatsClassDto> ByClass,
+    IReadOnlyList<StatsRegionDto> ByRegion,
+    IReadOnlyList<StatsRouteDto> Routes,
+    // 7 rows (Monday first) x 24 hours, Europe/Kyiv.
+    IReadOnlyList<IReadOnlyList<int>> HourWeekday,
+    IReadOnlyList<StatsSliceDto> EventTypes,
+    IReadOnlyList<StatsSliceDto> Methods,
+    IReadOnlyList<StatsSliceDto> Confidence,
+    IReadOnlyList<StatsSliceDto> LocationKinds,
+    IReadOnlyList<StatsAlertRegionDto> AlertsByRegion,
+    IReadOnlyList<StatsSliceDto> AlertDurations,
+    IReadOnlyList<StatsSourceDto> Sources);

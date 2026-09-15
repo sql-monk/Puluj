@@ -94,6 +94,24 @@ export interface AlertDto {
   endedAt?: string
   /** Point + radius for places without a polygon (raion towns). */
   location?: LocationDto
+  /** The place's parents, nearest first, up to the root: [raion, oblast] for a hromada, [oblast] for a raion, [] for an
+   * oblast or Kyiv. An alert covers a place when its placeId is the place or one of the place's ancestors; it lies inside
+   * the place when the place is among these. */
+  ancestorIds: number[]
+}
+
+/** The live map's time windows (GET /api/map/config): the lifetime choices and the feed depth the server works with. */
+export interface MapConfigDto {
+  lifetimeOptionsMinutes: number[]
+  maxLifetimeMinutes: number
+  feedHours: number
+}
+
+/** The live map's time windows (GET /api/map/config): the lifetime choices and the feed depth the server works with. */
+export interface MapConfigDto {
+  lifetimeOptionsMinutes: number[]
+  maxLifetimeMinutes: number
+  feedHours: number
 }
 
 export interface SnapshotDto {
@@ -281,4 +299,105 @@ export interface TimelineBucketDto {
   targets: number
   tracksOpened: number
   alerts: number
+}
+
+// Statistics page (GET /api/stats): every chart of one period in one payload.
+export type StatsBucketUnit = 'hour' | 'day' | 'week'
+
+export interface StatsTotalsDto {
+  targets: number
+  tracks: number
+  objectsDeclared: number
+  alerts: number
+  alertHours: number
+  messages: number
+  messagesProcessed: number
+  messagesWithTargets: number
+  activeSources: number
+}
+
+export interface StatsCategoryDto {
+  code: string
+  name: string
+}
+
+/** One time bucket; `targets` / `tracks` are counts per category in the order of `StatsDto.categories`. */
+export interface StatsBucketDto {
+  at: string
+  targets: number[]
+  tracks: number[]
+  alerts: number
+  alertHours: number
+}
+
+export interface StatsClassDto {
+  code: string
+  name: string
+  categoryCode: string
+  targets: number
+  tracks: number
+  objectsDeclared: number
+}
+
+export interface StatsRegionDto {
+  /** Absent for the folded "other" row. */
+  id?: number
+  name: string
+  targets: number
+}
+
+export interface StatsRouteDto {
+  fromId: number
+  fromName: string
+  toId: number
+  toName: string
+  count: number
+}
+
+export interface StatsSliceDto {
+  key: string
+  label: string
+  count: number
+}
+
+export interface StatsAlertRegionDto {
+  id: number
+  name: string
+  count: number
+  hours: number
+}
+
+export interface StatsSourceDto {
+  id: number
+  code: string
+  name: string
+  messages: number
+  processed: number
+  withTargets: number
+  targets: number
+  medianLagSeconds?: number
+  /** Messages per bucket, aligned with `StatsDto.bucketStarts`. */
+  series: number[]
+}
+
+export interface StatsDto {
+  from: string
+  to: string
+  bucket: StatsBucketUnit
+  bucketStarts: string[]
+  totals: StatsTotalsDto
+  categories: StatsCategoryDto[]
+  timeline: StatsBucketDto[]
+  byClass: StatsClassDto[]
+  byRegion: StatsRegionDto[]
+  routes: StatsRouteDto[]
+  /** 7 rows (Monday first) × 24 hours, Europe/Kyiv. */
+  hourWeekday: number[][]
+  eventTypes: StatsSliceDto[]
+  methods: StatsSliceDto[]
+  confidence: StatsSliceDto[]
+  locationKinds: StatsSliceDto[]
+  alertsByRegion: StatsAlertRegionDto[]
+  alertDurations: StatsSliceDto[]
+  sources: StatsSourceDto[]
 }

@@ -17,7 +17,7 @@ public class LlmParserTests
         var indexes = new StaticIndexes();
         var normalizer = new Normalizer();
         return new LlmParser(new RuleParser(indexes), indexes, normalizer, new StaticMonitor(new LlmOptions { Enabled = false }),
-            new PulujMetrics(new TestMeterFactory()), NullLogger<LlmParser>.Instance);
+            new PulujMetrics(new TestMeterFactory()), TimeProvider.System, NullLogger<LlmParser>.Instance);
     }
 
     [Fact]

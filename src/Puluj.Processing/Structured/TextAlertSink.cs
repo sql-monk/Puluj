@@ -35,11 +35,14 @@ public sealed class TextAlertSink(TimeProvider clock, ILogger<TextAlertSink> log
                 // alerted again after an "відбій".
                 var prefix = KeyPrefix + placeId + ":";
                 var key = prefix + o.ObservedAt.ToUnixTimeSeconds();
+                // The interval active at the message's time (event time, not the clock: a rebuild of old messages must
+                // see the same intervals as live processing did), so a repeat neither reopens an ended alert nor
+                // duplicates one that a history load stored already closed.
                 var open = await db.AirAlerts
-                    .Where(a => a.SourceId == source.SourceId && a.SourceAlertId.StartsWith(prefix) && a.EndedAt == null)
+                    .Where(a => a.SourceId == source.SourceId && a.SourceAlertId.StartsWith(prefix)
+                        && a.StartedAt <= o.ObservedAt && (a.EndedAt == null || a.EndedAt > o.ObservedAt))
                     .OrderByDescending(a => a.StartedAt)
                     .FirstOrDefaultAsync(ct);
-                // Event time, not the clock: a rebuild of old messages must see the same intervals as live processing did.
                 if (open is not null && o.ObservedAt - open.StartedAt > MaxAge)
                 {
                     open.EndedAt = o.ObservedAt;
@@ -47,6 +50,10 @@ public sealed class TextAlertSink(TimeProvider clock, ILogger<TextAlertSink> log
                 }
                 if (open is null)
                 {
+                    // A message older than MaxAge is history (a rebuild, a backfill): the interval is stored already
+                    // expired, so an alert of months ago never shows open on the live map until the watchdog's next pass.
+                    // A later "відбій" inside it still shortens it.
+                    var history = now - o.ObservedAt > MaxAge;
                     var alert = new AirAlert
                     {
                         SourceId = source.SourceId,
@@ -55,6 +62,7 @@ public sealed class TextAlertSink(TimeProvider clock, ILogger<TextAlertSink> log
                         AlertType = AirAlertType.AirRaid,
                         Level = o.AlertLevel,
                         StartedAt = o.ObservedAt,
+                        EndedAt = history ? o.ObservedAt + MaxAge : null,
                         StartRawMessageId = o.RawMessageId,
                     };
                     db.AirAlerts.Add(alert);
@@ -70,8 +78,11 @@ public sealed class TextAlertSink(TimeProvider clock, ILogger<TextAlertSink> log
             else if (o.EventType == EventType.AlertCancelled)
             {
                 // "Відбій" for a place also ends the text alerts of the places inside it (raion towns inside their oblast).
+                // Only what was in force at that moment: a replayed old "відбій" must not close an alert that started
+                // after it, and one that a history load stored already expired is shortened to the real end.
                 var open = await db.AirAlerts.Include(a => a.Place)
-                    .Where(a => a.SourceAlertId.StartsWith(KeyPrefix) && a.EndedAt == null
+                    .Where(a => a.SourceAlertId.StartsWith(KeyPrefix)
+                        && a.StartedAt <= o.ObservedAt && (a.EndedAt == null || a.EndedAt > o.ObservedAt)
                         && (a.PlaceId == placeId || a.Place!.ParentId == placeId))
                     .ToListAsync(ct);
                 foreach (var a in open)

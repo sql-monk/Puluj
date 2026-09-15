@@ -1,6 +1,6 @@
 import * as maplibregl from 'maplibre-gl'
 import type { GeoJSONSource, MapLayerMouseEvent } from 'maplibre-gl'
-import type { FeatureCollection, Geometry } from 'geojson'
+import type { FeatureCollection, Geometry, Position } from 'geojson'
 import type { TrackLayers } from './geojson'
 import { DISPLAY_MODES, type MapPalette } from './palette'
 
@@ -47,6 +47,9 @@ export function addIcons(map: maplibregl.Map, p: MapPalette) {
     const selected = p.selected[mode]
     put(`arrow-${mode}`, drawIcon(color, 'arrow', p, edge))
     put(`dot-${mode}`, drawIcon(color, 'dot', p, edge))
+    // Hovered: the same glyph with a wider light halo; the hover layer also draws it larger.
+    put(`hov-arrow-${mode}`, drawIcon(color, 'arrow', p, edge, HOVER_HALO))
+    put(`hov-dot-${mode}`, drawIcon(color, 'dot', p, edge, HOVER_HALO))
     // Selected: the glyph flips to the class's opposite colour, edged in the class colour so the class stays readable.
     put(`sel-arrow-${mode}`, drawIcon(selected, 'arrow', p, color))
     put(`sel-dot-${mode}`, drawIcon(selected, 'dot', p, color))
@@ -67,10 +70,15 @@ export function addIcons(map: maplibregl.Map, p: MapPalette) {
 
 /** Badge images exist for 1..BADGE_MAX-1 and "BADGE_MAX-1+". */
 const BADGE_MAX = 31
+/** Halo width (image px) of the plain glyph and of the hovered one. */
+const GLYPH_HALO = 8
+const HOVER_HALO = 14
+/** How far (css px) from the cursor a target is still picked up by a click or a hover. */
+export const HIT_RADIUS = 12
 
 /** Marker glyphs, all pointing "up" (north); the layer rotates them by the course. A light halo, then the class's own
  * light outline around its dark fill, keeps them readable on both basemaps and over alert fills. */
-function drawIcon(color: string, shape: 'arrow' | 'dot' | 'head', p: MapPalette, edge?: string): ImageData {
+function drawIcon(color: string, shape: 'arrow' | 'dot' | 'head', p: MapPalette, edge?: string, halo = GLYPH_HALO): ImageData {
   const size = 64
   const c = size / 2
   const canvas = document.createElement('canvas')
@@ -111,7 +119,7 @@ function drawIcon(color: string, shape: 'arrow' | 'dot' | 'head', p: MapPalette,
   // A wide light halo, then the class outline: a dark fill must still stand out on a red-level alert fill.
   path()
   ctx.strokeStyle = p.glyphHalo
-  ctx.lineWidth = 8
+  ctx.lineWidth = halo
   ctx.stroke()
   path()
   ctx.strokeStyle = edge ?? p.glyphEdge
@@ -425,6 +433,23 @@ export function addTrackLayers(map: maplibregl.Map, p: MapPalette, opts: { label
     // An approach-zone anchor is drawn paler: it is where the object is going, not a fix.
     paint: { 'icon-opacity': ['*', ['case', ['get', 'approx'], 0.6, 1], ['get', 'opacity']] },
   })
+  // The target under the cursor: its own glyph, larger and with a wider halo, over the plain one (no ring, no disc).
+  // The filter is switched by trackHover; -1 matches nothing.
+  map.addLayer({
+    id: 'track-hover',
+    type: 'symbol',
+    source: 'track-points',
+    filter: ['==', ['get', 'id'], -1],
+    layout: {
+      'icon-image': ['concat', ['case', ['get', 'selected'], 'sel-', 'hov-'], ['case', ['get', 'hasDirection'], 'arrow-', 'dot-'], ['get', 'mode']],
+      'icon-size': 0.9 * iconScale,
+      'icon-rotate': ['get', 'rotation'],
+      'icon-rotation-alignment': 'map',
+      'icon-allow-overlap': true,
+      'icon-ignore-placement': true,
+    },
+    paint: { 'icon-opacity': ['max', 0.85, ['get', 'opacity']] },
+  })
   map.addLayer({
     id: 'track-labels',
     type: 'symbol',
@@ -468,11 +493,29 @@ export interface TrackHit {
   link?: { fromTargetId: number; toTargetId: number; probability: number; pathProbability: number; kind: string }
 }
 
-/** The track under a click: its marker, badge, crumb, forecast or a family leg (top-most first, so a marker over a
- * leg wins). The dashed last-known area is not a target: a click on empty ground inside an oblast must select the
- * oblast, even when a track is drawn as that oblast. */
-export function hitAt(map: maplibregl.Map, point: maplibregl.Point): TrackHit | null {
-  const f = map.queryRenderedFeatures(point, { layers: TRACK_HIT_LAYERS })[0]
+/**
+ * The track under a click or the cursor: its marker, badge, crumb, forecast or a family leg (top-most first, so a
+ * marker over a leg wins). Nothing exactly under the point: the nearest target within HIT_RADIUS, so a marker needs
+ * no pixel-perfect aim. The dashed last-known area is not a target: a click on empty ground inside an oblast must
+ * select the oblast, even when a track is drawn as that oblast.
+ */
+export function hitAt(map: maplibregl.Map, point: maplibregl.Point, radius = HIT_RADIUS): TrackHit | null {
+  const layers = TRACK_HIT_LAYERS.filter((l) => map.getLayer(l))
+  if (layers.length === 0) return null
+  const exact = map.queryRenderedFeatures(point, { layers })[0]
+  const f =
+    exact ??
+    nearestHit(
+      map.queryRenderedFeatures(
+        [
+          [point.x - radius, point.y - radius],
+          [point.x + radius, point.y + radius],
+        ],
+        { layers },
+      ),
+      point,
+      (lngLat) => map.project(lngLat as [number, number]),
+    )
   const props = f?.properties
   if (!f || !props || props.id === undefined) return null
   const trackId = Number(props.id)
@@ -480,6 +523,76 @@ export function hitAt(map: maplibregl.Map, point: maplibregl.Point): TrackHit | 
     return { trackId, link: { fromTargetId: Number(props.from), toTargetId: Number(props.to), probability: Number(props.linkProbability), pathProbability: Number(props.pathProbability), kind: String(props.linkKind ?? '') } }
   }
   return { trackId }
+}
+
+/** Something with a geometry and a layer: what queryRenderedFeatures returns, reduced to what nearestHit reads. */
+export interface HitCandidate {
+  geometry: Geometry
+  layer: { id: string }
+  properties: Record<string, unknown> | null
+}
+
+/**
+ * Among the features found in a box around the cursor: the point feature (marker, badge, crumb, node, chevron)
+ * closest to the cursor on screen; a line (tail, forecast, leg) only when no point is there. `project` maps
+ * lon/lat to screen pixels.
+ */
+export function nearestHit<T extends HitCandidate>(features: T[], point: { x: number; y: number }, project: (lngLat: Position) => { x: number; y: number }): T | undefined {
+  let best: T | undefined
+  let bestD = Infinity
+  for (const f of features) {
+    if (f.geometry.type !== 'Point') continue
+    const p = project(f.geometry.coordinates)
+    const d = Math.hypot(p.x - point.x, p.y - point.y)
+    if (d < bestD) {
+      best = f
+      bestD = d
+    }
+  }
+  return best ?? features.find((f) => f.geometry.type !== 'Point')
+}
+
+export interface TrackHoverOptions {
+  /** Region layers that keep the pointer cursor when the cursor leaves a target while still over one of them. */
+  fallbackLayers: string[]
+  /** False while the map is in another mode (picking a home point): no hover, cursor left alone. */
+  enabled?: () => boolean
+}
+
+/**
+ * Target-under-cursor: switches the `track-hover` layer to the hit track and shows the pointer cursor while one is
+ * under (or within HIT_RADIUS of) the cursor. Returns the teardown and a `current()` reader for other hover handlers.
+ */
+export function trackHover(map: maplibregl.Map, opts: TrackHoverOptions): { stop: () => void; current: () => number | null } {
+  let current: number | null = null
+  const apply = (id: number | null) => {
+    if (id === current) return
+    current = id
+    if (map.getLayer('track-hover')) map.setFilter('track-hover', ['==', ['get', 'id'], id ?? -1])
+  }
+  const clear = () => {
+    apply(null)
+    if (opts.enabled?.() !== false) map.getCanvas().style.cursor = ''
+  }
+  const move = (e: MapLayerMouseEvent) => {
+    if (opts.enabled?.() === false) return apply(null)
+    const hit = hitAt(map, e.point)
+    apply(hit?.trackId ?? null)
+    // Set on every move, not only on change: a region layer's mouseleave may have reset it under a marker on the edge.
+    const layers = opts.fallbackLayers.filter((l) => map.getLayer(l))
+    map.getCanvas().style.cursor = hit || (layers.length > 0 && map.queryRenderedFeatures(e.point, { layers }).length > 0) ? 'pointer' : ''
+  }
+  map.on('mousemove', move)
+  map.on('mouseout', clear)
+  map.on('dragstart', clear)
+  return {
+    stop: () => {
+      map.off('mousemove', move)
+      map.off('mouseout', clear)
+      map.off('dragstart', clear)
+    },
+    current: () => current,
+  }
 }
 
 export function pointerCursor(map: maplibregl.Map, layers: string[]) {

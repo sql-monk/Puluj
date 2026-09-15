@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { TargetDto } from '../api/types'
+import { alertsFor, ancestorsOf, effectiveLevel, levelTone } from '../lib/alerts'
 import { clock, confidenceLabel } from '../lib/format'
 import Highlight from './Highlight'
 import { sourceEnabled, usePalette, useStore } from '../store/useStore'
@@ -41,11 +42,14 @@ export default function FeedPanel({ open, onToggle }: { open: boolean; onToggle:
     return byTime.filter((o) => hit(o) || (selectedTrackId !== null && o.trackId === selectedTrackId))
   }, [targets, selectedRegionId, cutoff, filters, selectedTrackId])
   const fresh = (o: TargetDto) => cutoff !== null && cutoff - new Date(o.observedAt).getTime() < 3 * 60_000
-  // Alerts of the oblast itself plus levelled raion alerts inside it.
-  const regionAlerts = selectedRegionId
-    ? Object.values(alerts).filter((a) => !a.endedAt && (a.placeId === selectedRegionId || a.location?.regionId === selectedRegionId))
-    : []
-  const alertText = regionAlerts.some((a) => a.level !== 'Yellow') ? 'тривога' : regionAlerts.length > 0 ? 'жовтий рівень' : null
+  // Alerts concerning the selected place: on it, covering it, inside it — at their effective level.
+  const alertText = useMemo(() => {
+    if (!selectedRegionId) return null
+    const open = Object.values(alerts).filter((a) => !a.endedAt)
+    const regionsById = new Map(regions.map((r) => [r.id, r]))
+    const tone = levelTone(effectiveLevel(alertsFor(open, selectedRegionId, ancestorsOf(selectedRegionId, regionsById, open))))
+    return tone === 'red' ? 'тривога' : tone === 'yellow' ? 'жовтий рівень' : null
+  }, [alerts, regions, selectedRegionId])
 
   if (!open) {
     return (

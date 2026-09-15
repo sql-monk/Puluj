@@ -14,7 +14,8 @@ namespace Puluj.Processing.Correlation;
 /// The closure is stamped at event time (last seen + the timeout), never at wall-clock time, so a replay sees the
 /// track end when it faded. While the pipeline is behind (a rebuild or a history load: pending messages older than
 /// half an hour), "now" is the oldest pending message's time, so tracks of 2022 are not closed under the feet of the
-/// 2022 messages still to come.
+/// 2022 messages still to come. The sweep runs under AdvisoryLocks.Store like the correlation sink, so it never
+/// races a message being stored; every processor instance runs one, the others simply find nothing to close.
 /// </summary>
 public sealed class TrackWatchdog(
     IDbContextFactory<PulujDbContext> factory,
@@ -49,6 +50,8 @@ public sealed class TrackWatchdog(
     {
         var wall = clock.GetUtcNow();
         await using var db = await factory.CreateDbContextAsync(ct);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await db.Database.ExecuteSqlInterpolatedAsync(AdvisoryLocks.Take(AdvisoryLocks.Store), ct);
         var oldestPending = await db.RawMessages.AsNoTracking()
             .Where(r => r.ProcessingStatus == ProcessingStatus.Pending)
             .MinAsync(r => (DateTimeOffset?)r.PublishedAt, ct);
@@ -83,6 +86,7 @@ public sealed class TrackWatchdog(
             return;
         }
         await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
         foreach (var id in closed)
         {
             await notifier.PublishAsync(new PulujEvent(PulujEventType.TrackClosed, id, now), ct);

@@ -1,6 +1,6 @@
 import { THEMES, useStore, type Theme } from '../store/useStore'
 
-export type Page = 'ukraine' | 'kyiv'
+export type Page = 'ukraine' | 'kyiv' | 'stats'
 
 
 export default function TopBar({ page, onPage, menuOpen, onToggleMenu, onReplay, replay }: { page: Page; onPage: (p: Page) => void; menuOpen: boolean; onToggleMenu: () => void; onReplay: () => void; replay: boolean }) {
@@ -27,8 +27,8 @@ export default function TopBar({ page, onPage, menuOpen, onToggleMenu, onReplay,
       </button>
       <span className="font-semibold tracking-wide">Puluj</span>
       <span className="hidden text-slate-500 lg:inline dark:text-slate-400">ситуаційне оповіщення · OSINT</span>
-      <span className="ml-2 inline-flex overflow-hidden rounded-md border border-slate-300 text-xs dark:border-slate-600" role="tablist" aria-label="Карта">
-        {(['ukraine', 'kyiv'] as Page[]).map((v) => (
+      <span className="ml-2 inline-flex shrink-0 overflow-hidden rounded-md border border-slate-300 text-xs dark:border-slate-600" role="tablist" aria-label="Сторінка">
+        {(['ukraine', 'kyiv', 'stats'] as Page[]).map((v) => (
           <button
             key={v}
             role="tab"
@@ -36,7 +36,7 @@ export default function TopBar({ page, onPage, menuOpen, onToggleMenu, onReplay,
             className={`px-2.5 py-1 ${page === v ? 'bg-blue-600 text-white' : 'hover:bg-slate-200 dark:hover:bg-slate-700'}`}
             onClick={() => onPage(v)}
           >
-            {v === 'ukraine' ? 'Україна' : 'Київ'}
+            {v === 'ukraine' ? 'Україна' : v === 'kyiv' ? 'Київ' : 'Статистика'}
           </button>
         ))}
       </span>

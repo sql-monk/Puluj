@@ -20,6 +20,8 @@ public sealed class ReferenceCache(IDbContextFactory<PulujDbContext> factory, IL
     public IReadOnlyDictionary<int, TargetFamily> Families { get; private set; } = new Dictionary<int, TargetFamily>();
     public IReadOnlyDictionary<int, TargetModel> Models { get; private set; } = new Dictionary<int, TargetModel>();
     public IReadOnlyDictionary<int, PlaceInfo> Places { get; private set; } = new Dictionary<int, PlaceInfo>();
+    /// <summary>Parent → children, rebuilt with <see cref="Places"/>: the descendant walk for alert history.</summary>
+    private ILookup<int, int> _children = Array.Empty<PlaceInfo>().ToLookup(p => 0, p => p.Id);
     public IReadOnlyDictionary<int, Source> Sources { get; private set; } = new Dictionary<int, Source>();
     public TaxonomyDto Taxonomy { get; private set; } = new([]);
 
@@ -39,6 +41,64 @@ public sealed class ReferenceCache(IDbContextFactory<PulujDbContext> factory, IL
             p = Place(p.ParentId);
         }
         return null;
+    }
+
+    /// <summary>The place's parents, nearest first, up to the root: `[raion, oblast]` for a hromada, empty for an oblast.</summary>
+    public IReadOnlyList<int> Ancestors(int? placeId) => Ancestors(Place, placeId);
+
+    /// <summary>Every place under this one (raions, hromadas, settlements of an oblast), any depth; the place itself excluded.</summary>
+    public IReadOnlyCollection<int> Descendants(int placeId) => Descendants(_children, placeId);
+
+    /// <summary>The place, the places that cover it and the places inside it: every place an alert "concerning" it can sit on.</summary>
+    public List<int> Related(int placeId)
+    {
+        var ids = new List<int> { placeId };
+        ids.AddRange(Ancestors(placeId));
+        ids.AddRange(Descendants(placeId));
+        return ids;
+    }
+
+    /// <summary>Hierarchy depth guard: the gazetteer nests at most country → oblast → raion → hromada → settlement → part.</summary>
+    private const int MaxDepth = 8;
+
+    public static IReadOnlyList<int> Ancestors(Func<int?, PlaceInfo?> place, int? placeId)
+    {
+        var chain = new List<int>();
+        var p = place(placeId);
+        for (var i = 0; i < MaxDepth && p?.ParentId is int parent; i++)
+        {
+            // A bad parent pointer (loop) must not spin: stop at the first repeat.
+            if (parent == placeId || chain.Contains(parent))
+            {
+                break;
+            }
+            chain.Add(parent);
+            p = place(parent);
+        }
+        return chain;
+    }
+
+    public static IReadOnlyCollection<int> Descendants(ILookup<int, int> children, int placeId)
+    {
+        var found = new HashSet<int>();
+        var queue = new Queue<(int Id, int Depth)>();
+        queue.Enqueue((placeId, 0));
+        while (queue.Count > 0)
+        {
+            var (id, depth) = queue.Dequeue();
+            if (depth >= MaxDepth)
+            {
+                continue;
+            }
+            foreach (var child in children[id])
+            {
+                if (child != placeId && found.Add(child))
+                {
+                    queue.Enqueue((child, depth + 1));
+                }
+            }
+        }
+        return found;
     }
 
     public SpeedProfileDto SpeedProfile(int? classId, int? modelId)
@@ -90,6 +150,7 @@ public sealed class ReferenceCache(IDbContextFactory<PulujDbContext> factory, IL
                 .Select(p => new { p.PlaceId, p.Name, p.Level, p.ParentId, p.CountryCode, p.Centroid, p.RadiusKm, p.Population })
                 .ToListAsync(ct))
             .ToDictionary(p => p.PlaceId, p => new PlaceInfo(p.PlaceId, p.Name, p.Level, p.ParentId, p.CountryCode, p.Centroid.X, p.Centroid.Y, p.RadiusKm, p.Population ?? 0));
+        _children = Places.Values.Where(p => p.ParentId is not null).ToLookup(p => p.ParentId!.Value, p => p.Id);
         Taxonomy = BuildTaxonomy();
         _ready.TrySetResult();
         logger.LogInformation("Reference cache: {Models} models, {Places} places", Models.Count, Places.Count);

@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Puluj.Api.Hubs;
 using Puluj.Api.Services;
 using Puluj.Contracts;
@@ -16,6 +17,13 @@ public static class EndpointRouteBuilderExtensions
     {
         var api = app.MapGroup("/api");
         api.MapGet("/version", () => new { version = typeof(Program).Assembly.GetName().Version?.ToString() ?? "0.0" });
+
+        // The live map's time windows: the client's lifetime picker and its own pruning use the server's numbers.
+        api.MapGet("/map/config", (IOptions<MapOptions> map, HttpContext http) =>
+        {
+            http.Response.Headers.CacheControl = "public, max-age=300";
+            return new MapConfigDto(map.Value.LifetimeOptionsMinutes, (int)map.Value.MaxLifetime.TotalMinutes, map.Value.FeedHours);
+        });
 
         // Live state or the state at a moment in the past (spec §20). Same shape for both.
         api.MapGet("/snapshot", async (DateTimeOffset? at, bool? activeOnly, SnapshotService snapshots, CancellationToken ct) =>
@@ -39,11 +47,11 @@ public static class EndpointRouteBuilderExtensions
         api.MapGet("/targets/{id:long}", async Task<Results<Ok<TargetDto>, NotFound>> (long id, SnapshotService snapshots, CancellationToken ct) =>
             await snapshots.TargetAsync(id, ct) is { } o ? TypedResults.Ok(o) : TypedResults.NotFound());
 
-        // Feed: newest targets for the side panel (default last 6 h). `until` bounds a replay window.
-        api.MapGet("/targets", async (DateTimeOffset? since, DateTimeOffset? until, int? limit, SnapshotService snapshots, TimeProvider clock, CancellationToken ct) =>
-            await snapshots.RecentTargetsAsync(since ?? clock.GetUtcNow().AddHours(-6), until, limit ?? 300, ct));
+        // Feed: newest targets for the side panel (the feed window by default, never further back). `until` bounds a replay window.
+        api.MapGet("/targets", async (DateTimeOffset? since, DateTimeOffset? until, int? limit, SnapshotService snapshots, TimeProvider clock, IOptions<MapOptions> map, CancellationToken ct) =>
+            await snapshots.RecentTargetsAsync(since ?? clock.GetUtcNow() - map.Value.FeedWindow, until, limit ?? 300, ct));
 
-        // Alert history of one place (the region window: current alert, last one, count and total time over 24 h).
+        // Alert history of one place — on it, covering it or inside it (the region window: current alert, last one, count and total time over 24 h).
         api.MapGet("/alerts/history", async (int placeId, double? hours, SnapshotService snapshots, CancellationToken ct) =>
             await snapshots.AlertHistoryAsync(placeId, hours ?? 24, ct));
 
@@ -105,6 +113,9 @@ public static class EndpointRouteBuilderExtensions
             http.Response.Headers.CacheControl = "public, max-age=3600";
             return Results.Ok(geometry);
         });
+
+        // Statistics page (charts over a period): src/Puluj.Api/Endpoints/StatsEndpoints.cs.
+        api.MapStatsEndpoints();
 
         app.MapHub<MapHub>("/hubs/map");
         return app;

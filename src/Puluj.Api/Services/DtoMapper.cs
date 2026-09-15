@@ -95,7 +95,7 @@ public sealed class DtoMapper(ReferenceCache refs)
         r.ObjectCount, r.TargetCount, Math.Max(1, sourceIds.Count), sourceIds, fixes ?? [], messageIds ?? []);
 
     public AlertDto Alert(AirAlert a) =>
-        new(a.AirAlertId, a.PlaceId, refs.Place(a.PlaceId)?.Name ?? $"#{a.PlaceId}", a.AlertType.ToString(), a.Level.ToString(), a.StartedAt, a.EndedAt, PlaceLocation(a.PlaceId));
+        new(a.AirAlertId, a.PlaceId, refs.Place(a.PlaceId)?.Name ?? $"#{a.PlaceId}", a.AlertType.ToString(), a.Level.ToString(), a.StartedAt, a.EndedAt, PlaceLocation(a.PlaceId), refs.Ancestors(a.PlaceId));
 
     public SourceDto Source(Source s) => new(s.SourceId, s.Code, s.Name, s.Type.ToString(), s.TrustLevel, s.Url);
 

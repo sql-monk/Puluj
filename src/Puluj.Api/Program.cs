@@ -49,6 +49,8 @@ app.UseDefaultFiles();
 app.UseStaticFiles();
 app.MapFallbackToFile("index.html");
 
+// Not a request is answered until the worker has brought the schema up to this code's model (SchemaReadiness).
+await Puluj.Infrastructure.Persistence.SchemaReadiness.WaitForMigrationsAsync(app.Services, app.Logger, app.Lifetime.ApplicationStopping);
 app.Run();
 
 public partial class Program;

@@ -3,10 +3,11 @@
 # (raw messages + NOTIFY), so any of them can be restarted, scaled down or moved independently.
 #
 #   postgis ─┬─ migrate (one-shot: migrations + seed) ─┬─ collector-telegram ─┐
-#            │                                          ├─ collector-alerts   ─┼─ raw_messages → processor
-#            │                                          ├─ processor                        (NOTIFY wakes it)
+#            │                                          ├─ collector-alerts   ─┼─ raw_messages → processor × N
+#            │                                          ├─ processor (replicas)             (NOTIFY wakes them)
 #            │                                          ├─ api    (public map, read-only role)
-#            │                                          └─ admin  (settings, status, logs)
+#            │                                          ├─ admin  (settings, status, logs)
+#            │                                          └─ analytics (source analytics: who copies whom; own schema)
 
 name: puluj
 
@@ -80,14 +81,21 @@ services:
       Worker__Roles: alerts
       Serilog__WriteTo__1__Args__path: /app/logs/worker-collector-alerts-.log
 
-  # Parsing, correlation, track watchdog (and the LLM fallback): the single consumer of raw_messages.
-  # Exactly one instance — the sweep and the correlation assume a single processor.
+  # Parsing, correlation, track watchdog (and the LLM fallback). Scales horizontally: every replica claims messages
+  # from raw_messages (status InProgress + claimed_by), so a message is processed exactly once; parsing runs in
+  # parallel, the store stage is serialised by an advisory lock. Worker__AppendHostName gives each replica its own name
+  # (heartbeat, claimed_by, `app` in the shared log file). Processing__Concurrency = workers per replica.
+  # For a strictly ordered, reproducible rebuild run one replica with Processing__Concurrency=1.
   processor:
     <<: *worker
+    deploy:
+      replicas: 2
     environment:
       <<: *worker-env
       Worker__Name: processor
+      Worker__AppendHostName: "true"
       Worker__Roles: processing
+      Processing__Concurrency: "2"
       Serilog__WriteTo__1__Args__path: /app/logs/worker-processor-.log
 
   # Public map: read-only database role (created by the migrations; change the password with ALTER ROLE).
@@ -132,6 +140,33 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Source analytics: indexes the message texts into the `analytics` schema (who copies whom, forwards, activity,
+  # track firsts); the admin panel reads that schema. Owner role: it applies its own migrations. Port not published.
+  analytics:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.analytics
+    env_file: .env
+    environment:
+      ConnectionStrings__Puluj: "Host=postgis;Port=5432;Database=puluj;Username=puluj;Password=${POSTGRES_PASSWORD:-puluj}"
+      ASPNETCORE_URLS: http://+:8082
+      Analytics__Name: analytics
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+    volumes:
+      - logs:/app/logs
+    depends_on:
+      postgis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "dotnet", "Puluj.Analytics.Worker.dll", "--healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     restart: unless-stopped
 
 volumes:

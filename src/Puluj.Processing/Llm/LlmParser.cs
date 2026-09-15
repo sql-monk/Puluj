@@ -31,15 +31,19 @@ public sealed class LlmParser : IParser
     private readonly PulujMetrics _metrics;
     private readonly ILogger<LlmParser> _logger;
     private readonly RateLimiter _limiter;
+    private readonly LlmBreaker _breaker;
+    private readonly TimeProvider _clock;
     private readonly Lazy<string> _systemPrompt;
     private readonly object _clientLock = new();
     private AnthropicClient? _client;
     private string? _clientKey;
     private bool _warnedNoKey;
 
-    public LlmParser(RuleParser rules, IIndexes indexes, INormalizer normalizer, IOptionsMonitor<LlmOptions> options, PulujMetrics metrics, ILogger<LlmParser> logger)
+    public LlmParser(RuleParser rules, IIndexes indexes, INormalizer normalizer, IOptionsMonitor<LlmOptions> options, PulujMetrics metrics, TimeProvider clock, ILogger<LlmParser> logger)
     {
         _rules = rules;
+        _clock = clock;
+        _breaker = new LlmBreaker(options.CurrentValue.FailurePause);
         _indexes = indexes;
         _normalizer = normalizer;
         _monitor = options;
@@ -104,6 +108,12 @@ public sealed class LlmParser : IParser
             _metrics.LlmCall("stale");
             return facts;
         }
+        if (_breaker.IsOpen(_clock.GetUtcNow(), out var reason))
+        {
+            _metrics.LlmCall("paused");
+            _logger.LogDebug("LLM paused ({Reason}); rules only", reason);
+            return facts;
+        }
         using var lease = _limiter.AttemptAcquire();
         if (!lease.IsAcquired)
         {
@@ -114,6 +124,7 @@ public sealed class LlmParser : IParser
         {
             var result = await AskAsync(message.Text, ct);
             var mapped = Map(result, message);
+            _breaker.Reset();
             _metrics.LlmCall(mapped.Count > 0 ? "facts" : "empty");
             return mapped;
         }
@@ -121,15 +132,19 @@ public sealed class LlmParser : IParser
         {
             throw;
         }
-        catch (AnthropicRateLimitException ex)
-        {
-            _metrics.LlmCall("429");
-            _logger.LogWarning(ex, "LLM rate limited");
-        }
         catch (AnthropicApiException ex)
         {
-            _metrics.LlmCall("api_error");
-            _logger.LogWarning(ex, "LLM request failed");
+            _metrics.LlmCall(ex is AnthropicRateLimitException ? "429" : "api_error");
+            // The API's own message (billing, auth, a rejected schema) says it all; the stack trace would only repeat the SDK.
+            var detail = ErrorMessage(ex);
+            if (_breaker.Trip(ex.StatusCode, detail, _clock.GetUtcNow()) is { } pause)
+            {
+                _logger.LogWarning("LLM request failed with {Status}: {Detail}; model paused for {Pause}", (int)ex.StatusCode, detail, pause);
+            }
+            else
+            {
+                _logger.LogWarning("LLM request failed with {Status}: {Detail}", (int)ex.StatusCode, detail);
+            }
         }
         catch (Exception ex) when (ex is TimeoutException or OperationCanceledException or JsonException)
         {
@@ -137,6 +152,28 @@ public sealed class LlmParser : IParser
             _logger.LogWarning(ex, "LLM fallback failed");
         }
         return facts;
+    }
+
+    /// <summary>The API's error message out of the response body ({"type":"error","error":{"type":..,"message":..}}), else the exception's.</summary>
+    private static string ErrorMessage(AnthropicApiException ex)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(ex.ResponseBody);
+            if (doc.RootElement.TryGetProperty("error", out var error))
+            {
+                var type = error.TryGetProperty("type", out var t) ? t.GetString() : null;
+                var message = error.TryGetProperty("message", out var m) ? m.GetString() : null;
+                if (message is not null)
+                {
+                    return type is null ? message : $"{type}: {message}";
+                }
+            }
+        }
+        catch (JsonException)
+        {
+        }
+        return ex.Message;
     }
 
     private static bool LooksLikeTargetReport(NormalizedMessage message) =>

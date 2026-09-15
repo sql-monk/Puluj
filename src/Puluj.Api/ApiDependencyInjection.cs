@@ -27,7 +27,11 @@ public static class ApiDependencyInjection
         services.AddSingleton<ReferenceCache>();
         services.AddHostedService(sp => sp.GetRequiredService<ReferenceCache>());
         services.AddSingleton<DtoMapper>();
+        services.Configure<MapOptions>(configuration.GetSection(MapOptions.Section));
         services.AddSingleton<SnapshotService>();
+        // Statistics page: aggregates cached per period (every entry Size = 1, at most 64 periods in memory).
+        services.AddMemoryCache(o => o.SizeLimit = 64);
+        services.AddSingleton<StatsService>();
         services.AddHostedService<NotifyBridge>();
 
         services.AddHealthChecks()

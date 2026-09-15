@@ -22,6 +22,7 @@
 | `src/Puluj.Worker` | хост збору та обробки; `Worker:Roles` (`migrate`, `telegram`, `alerts`, `processing`) вибирає, що саме запускає процес — у Docker кожна роль у своєму контейнері, без ролей усе разом |
 | `src/Puluj.Api` | публічна частина (:5257): REST (`/api/*`), SignalR (`/hubs/map`), роздача карти; БД лише на читання (роль `puluj_reader`) |
 | `src/Puluj.Admin` | адмін-панель (:5258): налаштування, рейтинг джерел, стан/статистика кожного компонента, логи; роль `puluj_admin` |
+| `src/Puluj.Analytics`, `Puluj.Analytics.Worker` | аналітика джерел окремим сервісом (:5259, контейнер `analytics`): порівнює тексти повідомлень — хто кого копіює, затримки, пересилання, активність, хто перший відкриває треки; власна схема `analytics`, сторінка «Аналітика» в панелі |
 | `web/` | React + Vite + MapLibre; дві точки входу (`index.html` карта, `admin.html` панель); ETA рахується в браузері |
 | `data/` | seed: `taxonomy/*.json`, `sources.json`, `gazetteer/regions.json`, `corpus/cases.json` (golden-тести парсера) |
 
@@ -35,7 +36,7 @@ docker compose -f deploy/docker-compose.yml up --build
 ```
 
 Контейнери: `postgis`, `migrate` (one-shot: міграції + seed, решта чекає його завершення), `collector-telegram`, `collector-alerts`,
-`processor` (парсинг, кореляція, watchdog — рівно один), `api`, `admin`. Усі — з одного образу Worker-а з різним `Worker__Roles`;
+`processor` (парсинг, кореляція, watchdog — 2 репліки, масштабується), `api`, `admin`. Усі — з одного образу Worker-а з різним `Worker__Roles`;
 між собою спілкуються лише через PostgreSQL (`raw_messages` + NOTIFY), тож будь-який можна перезапустити окремо:
 `docker compose -f deploy/docker-compose.yml restart collector-telegram`.
 

@@ -45,6 +45,9 @@ public class AirAlertConfiguration : IEntityTypeConfiguration<AirAlert>
         b.HasIndex(x => new { x.SourceId, x.SourceAlertId }).IsUnique();
         b.HasIndex(x => x.PlaceId).HasFilter("ended_at IS NULL");
         b.HasIndex(x => x.StartedAt).HasMethod("brin");
+        // The correlation sink finds the interval a message opened or closed (an AlertChanged push per alert message).
+        b.HasIndex(x => x.StartRawMessageId);
+        b.HasIndex(x => x.EndRawMessageId);
         b.HasOne(x => x.Place).WithMany().HasForeignKey(x => x.PlaceId).OnDelete(DeleteBehavior.Restrict);
         b.HasOne<Source>().WithMany().HasForeignKey(x => x.SourceId).OnDelete(DeleteBehavior.Restrict);
     }

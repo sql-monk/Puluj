@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Puluj.Contracts;
 using Puluj.Domain.Entities;
 using Puluj.Domain.Enums;
@@ -7,18 +8,51 @@ using Puluj.Infrastructure.Persistence;
 namespace Puluj.Api.Services;
 
 /// <summary>Read side: live snapshot, historical replay from revisions (spec §20), track details with provenance (spec §18).</summary>
-public sealed class SnapshotService(IDbContextFactory<PulujDbContext> factory, DtoMapper mapper, TimeProvider clock, ReferenceCache refs)
+public sealed class SnapshotService(IDbContextFactory<PulujDbContext> factory, DtoMapper mapper, TimeProvider clock, ReferenceCache refs, IOptions<MapOptions> options)
 {
-    /// <summary>Tracks that ended earlier than this before `at` are not part of a snapshot.</summary>
-    private static readonly TimeSpan RecentWindow = TimeSpan.FromHours(3);
+    /// <summary>In history mode, tracks last reported earlier than this before `at` are not part of a snapshot.</summary>
+    private static readonly TimeSpan HistoryWindow = TimeSpan.FromHours(3);
 
+    private MapOptions Map => options.Value;
+
+    // The live snapshot is the same for everyone, so it is built once per MapOptions.SnapshotCache and shared: a
+    // reconnect storm (every client re-fetches after a hub reconnect) costs one set of queries. One entry per
+    // `activeOnly` value. The build runs without a request token: one client going away must not fail the others.
+    private readonly object _cacheLock = new();
+    private readonly Dictionary<bool, (DateTimeOffset BuiltAt, Task<SnapshotDto> Task)> _liveCache = [];
+
+    /// <summary>
+    /// What is on the map right now: tracks last reported inside the longest marker lifetime a viewer can pick
+    /// (whatever their status; the client applies its own lifetime and "active only" on top) and every open alert
+    /// (an open alert is a state, not an event: some regions have been under one continuously since 2022).
+    /// </summary>
     public async Task<SnapshotDto> LiveAsync(bool activeOnly, CancellationToken ct)
+    {
+        if (Map.SnapshotCache <= TimeSpan.Zero)
+        {
+            return await BuildLiveAsync(activeOnly, ct);
+        }
+        var now = clock.GetUtcNow();
+        Task<SnapshotDto> task;
+        lock (_cacheLock)
+        {
+            if (!_liveCache.TryGetValue(activeOnly, out var entry) || entry.Task.IsFaulted || entry.Task.IsCanceled || now - entry.BuiltAt >= Map.SnapshotCache)
+            {
+                entry = (now, BuildLiveAsync(activeOnly, CancellationToken.None));
+                _liveCache[activeOnly] = entry;
+            }
+            task = entry.Task;
+        }
+        return await task.WaitAsync(ct);
+    }
+
+    private async Task<SnapshotDto> BuildLiveAsync(bool activeOnly, CancellationToken ct)
     {
         var now = clock.GetUtcNow();
         await using var db = await factory.CreateDbContextAsync(ct);
-        var since = now - RecentWindow;
+        var since = now - Map.MaxLifetime;
         var tracks = await db.TargetTracks.AsNoTracking()
-            .Where(t => activeOnly ? t.Status == TrackStatus.Active : t.LastSeenAt >= since || t.Status == TrackStatus.Active)
+            .Where(t => t.LastSeenAt >= since && (!activeOnly || t.Status == TrackStatus.Active))
             .OrderByDescending(t => t.LastSeenAt)
             .ToListAsync(ct);
         var alerts = await db.AirAlerts.AsNoTracking()
@@ -35,7 +69,7 @@ public sealed class SnapshotService(IDbContextFactory<PulujDbContext> factory, D
     public async Task<SnapshotDto> AtAsync(DateTimeOffset at, bool activeOnly, CancellationToken ct)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
-        var since = at - RecentWindow;
+        var since = at - HistoryWindow;
         // Latest revision of every track as of `at`.
         var revisions = await db.TargetTrackRevisions
             .FromSqlInterpolated($"""
@@ -65,7 +99,7 @@ public sealed class SnapshotService(IDbContextFactory<PulujDbContext> factory, D
 
     /// <summary>
     /// The tracks of a replay window with every position they were reported at (from their revisions): the client draws
-    /// each one moving between consecutive reports. Tracks last reported up to RecentWindow before the window start
+    /// each one moving between consecutive reports. Tracks last reported up to HistoryWindow before the window start
     /// are included so that whatever was still on the map at the start is there.
     /// </summary>
     public async Task<ReplayDto> ReplayAsync(DateTimeOffset from, DateTimeOffset to, CancellationToken ct)
@@ -79,7 +113,7 @@ public sealed class SnapshotService(IDbContextFactory<PulujDbContext> factory, D
             from = to - MaxReplayWindow;
         }
         await using var db = await factory.CreateDbContextAsync(ct);
-        var since = from - RecentWindow;
+        var since = from - HistoryWindow;
         var revisions = await db.TargetTrackRevisions.AsNoTracking()
             .Where(r => r.LastSeenAt >= since && r.LastSeenAt <= to && r.RevisionAt <= to)
             .OrderBy(r => r.TargetTrackId).ThenBy(r => r.LastSeenAt).ThenBy(r => r.RevisionAt)
@@ -115,10 +149,11 @@ public sealed class SnapshotService(IDbContextFactory<PulujDbContext> factory, D
         return new ReplayDto(from, to, tracks);
     }
 
-    public async Task<TrackDto?> TrackAsync(long id, CancellationToken ct)
+    /// <summary>One track as the map draws it; null when it does not exist or was last reported before <paramref name="notBefore"/> (the realtime bridge skips those).</summary>
+    public async Task<TrackDto?> TrackAsync(long id, CancellationToken ct, DateTimeOffset? notBefore = null)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
-        var t = await db.TargetTracks.AsNoTracking().FirstOrDefaultAsync(x => x.TargetTrackId == id, ct);
+        var t = await db.TargetTracks.AsNoTracking().FirstOrDefaultAsync(x => x.TargetTrackId == id && (notBefore == null || x.LastSeenAt >= notBefore), ct);
         return t is null ? null : mapper.Track(t, (await SourceIdsAsync(db, [id], null, ct)).GetValueOrDefault(id, []), (await FixesAsync(db, [id], null, ct)).GetValueOrDefault(id), (await MessageIdsAsync(db, [id], null, ct)).GetValueOrDefault(id));
     }
 
@@ -160,16 +195,39 @@ public sealed class SnapshotService(IDbContextFactory<PulujDbContext> factory, D
             .GroupBy(l => l.TargetTrackId)
             .Select(g => new { TrackId = g.Key, TargetId = g.OrderByDescending(l => l.Target!.ObservedAt).ThenByDescending(l => l.TargetId).Select(l => l.TargetId).First() })
             .ToListAsync(ct);
-        var result = new Dictionary<long, List<FixDto>>();
-        foreach (var head in heads)
+        if (heads.Count == 1)
         {
-            result[head.TrackId] = await ChainAsync(db, head.TargetId, ct);
+            return new Dictionary<long, List<FixDto>> { [heads[0].TrackId] = await ChainAsync(db, heads[0].TargetId, ct) };
+        }
+        // Every chain in one round trip (a snapshot has dozens of tracks): the function is applied laterally to each head.
+        var trackIds1 = heads.Select(h => h.TrackId).ToArray();
+        var headIds = heads.Select(h => h.TargetId).ToArray();
+        var rows = await db.Database.SqlQuery<TrackChainRow>($"""
+            SELECT h.track_id, c.step, c.target_id, c.probability
+            FROM unnest({trackIds1}::bigint[], {headIds}::bigint[]) AS h(track_id, target_id)
+            CROSS JOIN LATERAL puluj_target_chain(h.target_id, {MaxFixes - 1}) AS c
+            """).ToListAsync(ct);
+        var ids = rows.Select(r => r.TargetId).Distinct().ToList();
+        var targets = await db.Targets.AsNoTracking().Where(t => ids.Contains(t.TargetId)).ToDictionaryAsync(t => t.TargetId, ct);
+        var result = new Dictionary<long, List<FixDto>>();
+        foreach (var group in rows.GroupBy(r => r.TrackId))
+        {
+            var fixes = new List<FixDto>();
+            foreach (var r in group.OrderByDescending(r => r.Step))
+            {
+                if (targets.TryGetValue(r.TargetId, out var t) && mapper.Fix(t, r.Probability) is { } fix)
+                {
+                    fixes.Add(fix);
+                }
+            }
+            result[group.Key] = fixes;
         }
         return result;
     }
 
     // Unmapped query types follow the snake_case naming convention: the SQL columns are used as they are.
     private sealed record ChainRow(int Step, long TargetId, double Probability);
+    private sealed record TrackChainRow(long TrackId, int Step, long TargetId, double Probability);
     private sealed record FamilyRow(int Generation, long FromTargetId, long ToTargetId, int Kind, double Probability, double PathProbability, bool Ancestral);
 
     /// <summary>
@@ -284,9 +342,17 @@ public sealed class SnapshotService(IDbContextFactory<PulujDbContext> factory, D
         return new TrackDetailsDto(mapper.Track(t, sourceIds, fixes, messageIds), links.Select(l => mapper.Target(l.Target!, l.AssociationConfidence, id, LinksOf(l.TargetId))).ToList());
     }
 
-    /// <summary>Newest targets first (feed panel). Duplicates are kept — they are provenance too.</summary>
+    /// <summary>
+    /// Newest targets first (feed panel). Duplicates are kept — they are provenance too. Live (no `until`) never reaches
+    /// further back than the feed window; a replay window never further than MaxReplayWindow before its end.
+    /// </summary>
     public async Task<IReadOnlyList<TargetDto>> RecentTargetsAsync(DateTimeOffset since, DateTimeOffset? until, int limit, CancellationToken ct)
     {
+        var floor = until is { } u ? u - MaxReplayWindow : clock.GetUtcNow() - Map.FeedWindow;
+        if (since < floor)
+        {
+            since = floor;
+        }
         await using var db = await factory.CreateDbContextAsync(ct);
         var rows = await db.Targets.AsNoTracking()
             .Include(o => o.RawMessage)
@@ -312,23 +378,29 @@ public sealed class SnapshotService(IDbContextFactory<PulujDbContext> factory, D
             .ToDictionaryAsync(x => x.Key, x => x.TrackId, ct);
     }
 
-    /// <summary>Alerts of a place over the last `hours`, ended ones included, newest first: the region window's history.</summary>
+    /// <summary>
+    /// Alerts concerning a place over the last `hours`, ended ones included, newest first: the region window's history.
+    /// "Concerning" is hierarchical — on the place, on a place that covers it (a Kyiv district under a city-wide alert,
+    /// a raion under an oblast-wide one) or on a place inside it (a raion or hromada of the oblast).
+    /// </summary>
     public async Task<IReadOnlyList<AlertDto>> AlertHistoryAsync(int placeId, double hours, CancellationToken ct)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
         var since = clock.GetUtcNow().AddHours(-Math.Clamp(hours, 1, 24 * 14));
+        var ids = refs.Related(placeId).ToArray();
         var rows = await db.AirAlerts.AsNoTracking()
-            .Where(a => a.PlaceId == placeId && (a.EndedAt == null || a.EndedAt >= since))
+            .Where(a => ids.Contains(a.PlaceId) && (a.EndedAt == null || a.EndedAt >= since))
             .OrderByDescending(a => a.StartedAt)
             .Take(200)
             .ToListAsync(ct);
         return rows.Select(mapper.Alert).ToList();
     }
 
-    public async Task<TargetDto?> TargetAsync(long id, CancellationToken ct)
+    /// <summary>One report with its links; null when it does not exist or was observed before <paramref name="notBefore"/>.</summary>
+    public async Task<TargetDto?> TargetAsync(long id, CancellationToken ct, DateTimeOffset? notBefore = null)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
-        var o = await db.Targets.AsNoTracking().Include(x => x.RawMessage).FirstOrDefaultAsync(x => x.TargetId == id, ct);
+        var o = await db.Targets.AsNoTracking().Include(x => x.RawMessage).FirstOrDefaultAsync(x => x.TargetId == id && (notBefore == null || x.ObservedAt >= notBefore), ct);
         if (o is null)
         {
             return null;
@@ -343,10 +415,11 @@ public sealed class SnapshotService(IDbContextFactory<PulujDbContext> factory, D
         return mapper.Target(o, null, trackOf.TryGetValue(id, out var t) ? t : null, links);
     }
 
-    public async Task<AlertDto?> AlertAsync(long id, CancellationToken ct)
+    /// <summary>One alert; null when it does not exist or ended before <paramref name="endedNotBefore"/> (open alerts always qualify, whatever their age).</summary>
+    public async Task<AlertDto?> AlertAsync(long id, CancellationToken ct, DateTimeOffset? endedNotBefore = null)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
-        var a = await db.AirAlerts.AsNoTracking().FirstOrDefaultAsync(x => x.AirAlertId == id, ct);
+        var a = await db.AirAlerts.AsNoTracking().FirstOrDefaultAsync(x => x.AirAlertId == id && (endedNotBefore == null || x.EndedAt == null || x.EndedAt >= endedNotBefore), ct);
         return a is null ? null : mapper.Alert(a);
     }
 

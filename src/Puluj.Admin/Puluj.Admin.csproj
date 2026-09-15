@@ -10,6 +10,8 @@
     <ProjectReference Include="..\Puluj.Infrastructure\Puluj.Infrastructure.csproj" />
     <ProjectReference Include="..\Puluj.Contracts\Puluj.Contracts.csproj" />
     <ProjectReference Include="..\Puluj.Collectors\Puluj.Collectors.csproj" />
+    <!-- Read side of the source analytics schema (the Puluj.Analytics.Worker service maintains it). -->
+    <ProjectReference Include="..\Puluj.Analytics\Puluj.Analytics.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" />

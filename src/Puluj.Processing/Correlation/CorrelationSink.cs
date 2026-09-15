@@ -36,11 +36,12 @@ public sealed class CorrelationSink(
                     await HandleTargetAsync(db, o, source, events, now, usedTracks, ct);
                     break;
                 case EventType.AirRaidAlert or EventType.AlertCancelled:
-                    var alert = await db.AirAlerts.AsNoTracking()
-                        .FirstOrDefaultAsync(a => a.StartRawMessageId == o.RawMessageId || a.EndRawMessageId == o.RawMessageId, ct);
-                    if (alert is not null)
+                    // Two lookups, one index each: an OR over two columns is a sequential scan.
+                    var alertId = await db.AirAlerts.Where(a => a.StartRawMessageId == o.RawMessageId).Select(a => (long?)a.AirAlertId).FirstOrDefaultAsync(ct)
+                        ?? await db.AirAlerts.Where(a => a.EndRawMessageId == o.RawMessageId).Select(a => (long?)a.AirAlertId).FirstOrDefaultAsync(ct);
+                    if (alertId is { } id)
                     {
-                        events.Add(new PulujEvent(PulujEventType.AlertChanged, alert.AirAlertId, now));
+                        events.Add(new PulujEvent(PulujEventType.AlertChanged, id, now));
                     }
                     if (o.EventType == EventType.AlertCancelled)
                     {
@@ -79,8 +80,7 @@ public sealed class CorrelationSink(
                     AssociationReason = System.Text.Json.JsonDocument.Parse($"{{\"duplicateOf\":{duplicateOf.TargetId}}}"),
                 });
                 usedTracks.Add(track.TargetTrackId);
-                await RecountSourcesAsync(db, track, o.SourceId, ct);
-                track.TrackConfidence = TrackUpdater.ComputeTrackConfidence(track, await BestConfidenceAsync(db, track, o, ct));
+                await RefreshFromTargetsAsync(db, track, o, ct);
                 track.UpdatedAt = Later(track.UpdatedAt, o.ObservedAt);
                 db.TargetTrackRevisions.Add(TrackUpdater.Revision(track, o.TargetId, track.UpdatedAt));
                 events.Add(new PulujEvent(PulujEventType.TrackUpserted, track.TargetTrackId, now));
@@ -155,8 +155,7 @@ public sealed class CorrelationSink(
                 AssociationConfidence = bestScore!.Total,
                 AssociationReason = bestScore.ToJson(),
             });
-            await RecountSourcesAsync(db, best, o.SourceId, ct);
-            best.TrackConfidence = TrackUpdater.ComputeTrackConfidence(best, await BestConfidenceAsync(db, best, o, ct));
+            await RefreshFromTargetsAsync(db, best, o, ct);
             db.TargetTrackRevisions.Add(TrackUpdater.Revision(best, o.TargetId, best.UpdatedAt));
             await db.SaveChangesAsync(ct);
             logger.LogInformation("Target {Obs} attached to track {Track} (score {Score:F2})", o.TargetId, best.TargetTrackId, bestScore.Total);
@@ -195,22 +194,19 @@ public sealed class CorrelationSink(
         {
             return;
         }
-        var active = await db.TargetTracks.Where(t => t.Status == TrackStatus.Active && t.LastLocationPlaceId != null).ToListAsync(ct);
+        // A cancellation ends what was in the air at that moment: a replayed old "відбій" (history load, out-of-order
+        // sweep) must not close a track seen after it. Only tracks of the same target kind when the cancellation names
+        // one ("відбій загрози БпЛА"). Both cut the candidates in SQL; the region (a gazetteer hierarchy) is checked here.
+        var query = db.TargetTracks.Where(t => t.Status == TrackStatus.Active && t.LastLocationPlaceId != null && t.LastSeenAt <= o.ObservedAt);
+        if (o.TargetCategoryId is int category)
+        {
+            query = query.Where(t => t.TargetCategoryId == category);
+        }
+        var active = await query.ToListAsync(ct);
         foreach (var t in active)
         {
             var tp = indexes.Gazetteer.Get(t.LastLocationPlaceId!.Value);
             if (tp is null || indexes.Gazetteer.RegionOf(tp)?.PlaceId != region.PlaceId)
-            {
-                continue;
-            }
-            // Only close tracks of the same target kind when the cancellation names one ("відбій загрози БпЛА").
-            if (o.TargetCategoryId is not null && o.TargetCategoryId != t.TargetCategoryId)
-            {
-                continue;
-            }
-            // A cancellation ends what was in the air at that moment: a replayed old "відбій" (history load,
-            // out-of-order sweep) must not close a track seen after it.
-            if (t.LastSeenAt > o.ObservedAt)
             {
                 continue;
             }
@@ -225,22 +221,18 @@ public sealed class CorrelationSink(
 
     private static DateTimeOffset Later(DateTimeOffset a, DateTimeOffset b) => a > b ? a : b;
 
-    private static async Task RecountSourcesAsync(PulujDbContext db, TargetTrack track, int currentSourceId, CancellationToken ct)
+    /// <summary>
+    /// Distinct sources and the best target confidence of the track, from its stored targets plus the one being added
+    /// (not yet in track_targets): one query per attach instead of two.
+    /// </summary>
+    private static async Task RefreshFromTargetsAsync(PulujDbContext db, TargetTrack track, Target current, CancellationToken ct)
     {
-        var persisted = await db.TrackTargets
+        var stored = await db.TrackTargets
             .Where(l => l.TargetTrackId == track.TargetTrackId)
-            .Select(l => l.Target!.SourceId)
-            .Distinct()
+            .Select(l => new { l.Target!.SourceId, Confidence = (int)l.Target.Confidence })
             .ToListAsync(ct);
-        track.DistinctSourceCount = persisted.Append(currentSourceId).Distinct().Count();
-    }
-
-    private static async Task<ConfidenceLevel> BestConfidenceAsync(PulujDbContext db, TargetTrack track, Target current, CancellationToken ct)
-    {
-        var levels = await db.TrackTargets
-            .Where(l => l.TargetTrackId == track.TargetTrackId)
-            .Select(l => (int)l.Target!.Confidence)
-            .ToListAsync(ct);
-        return (ConfidenceLevel)levels.Append((int)current.Confidence).Max();
+        track.DistinctSourceCount = stored.Select(x => x.SourceId).Append(current.SourceId).Distinct().Count();
+        var best = (ConfidenceLevel)stored.Select(x => x.Confidence).Append((int)current.Confidence).Max();
+        track.TrackConfidence = TrackUpdater.ComputeTrackConfidence(track, best);
     }
 }

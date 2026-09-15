@@ -27,6 +27,7 @@ export default function FilterPanel({ open, onClose, picking, onPickingChange, o
   const filters = useStore((s) => s.filters)
   const setFilter = useStore((s) => s.setFilter)
   const sources = useStore((s) => s.sources)
+  const lifetimeOptions = useStore((s) => s.mapConfig.lifetimeOptionsMinutes)
   const home = useStore((s) => s.home)
   const trackCount = useStore((s) => Object.keys(s.tracks).length)
   const alertCount = useStore((s) => Object.keys(s.alerts).length)
@@ -79,7 +80,7 @@ export default function FilterPanel({ open, onClose, picking, onPickingChange, o
         <label className="mt-2 flex items-center justify-between gap-2 text-sm" title="Скільки часу після останнього повідомлення ціль лишається на карті">
           <span>Час життя позначки</span>
           <select className="rounded border border-slate-300 bg-white px-1 py-0.5 text-sm dark:border-slate-600 dark:bg-slate-800" value={filters.lifetimeMinutes} onChange={(e) => setFilter('lifetimeMinutes', Number(e.target.value))}>
-            {[5, 10, 15, 20, 30, 45, 60, 120].map((m) => (
+            {lifetimeOptions.map((m) => (
               <option key={m} value={m}>
                 {m} хв
               </option>

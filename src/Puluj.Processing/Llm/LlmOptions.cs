@@ -16,6 +16,9 @@ public sealed class LlmOptions
     /// rebuild of years of history would otherwise mean tens of thousands of paid calls at seconds each. 0 = no limit.
     /// </summary>
     public double MaxMessageAgeHours { get; set; } = 72;
+    /// <summary>How long the model is left alone after a failure that another call would only repeat (a rejected request,
+    /// a bad key, an exhausted balance). A rate limit pauses it for one minute regardless.</summary>
+    public TimeSpan FailurePause { get; set; } = TimeSpan.FromMinutes(15);
     /// <summary>Bumped whenever the prompt changes; stored with every LLM-derived target.</summary>
     public string PromptVersion { get; set; } = "1";
 }

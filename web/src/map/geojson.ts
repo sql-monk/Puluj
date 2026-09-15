@@ -1,9 +1,11 @@
 import destination from '@turf/destination'
+import difference from '@turf/difference'
 import distance from '@turf/distance'
 import { point } from '@turf/helpers'
 import type { Feature, FeatureCollection, GeoJsonProperties, Geometry, LineString, Point, Polygon, MultiPolygon, Position } from 'geojson'
 import type { AlertDto, AlertLevel, Confidence, PredecessorLinkDto, PredecessorsDto, RegionDto, TrackDto } from '../api/types'
 import { computeEta, distanceToRegionKm, type Home } from '../eta/computeEta'
+import { effectiveLevel } from '../lib/alerts'
 import type { ReplayPosition } from '../replay/engine'
 import { displayModeEnabled, type Filters, type SelectedLink } from '../store/useStore'
 
@@ -376,10 +378,12 @@ function cone(origin: Position, km: number, bearing: number, halfAngle: number, 
 }
 
 export interface AlertProps {
+  /** The earliest alert on the place: the feature's identity. */
   id: number
   placeId: number
   placeName: string
   alertType: string
+  /** The effective level at this place (its own alerts and those covering it), the colour of the fill. */
   level: AlertLevel
   startedAt: string
 }
@@ -397,26 +401,77 @@ function circle(center: Position, km: number, steps = 48): Polygon {
   return { type: 'Polygon', coordinates: [ring] }
 }
 
+type Area = Polygon | MultiPolygon
+
+/**
+ * One fill per alerted place, and one colour at every point of the map. Alerts are grouped by place; a place's level is
+ * the effective level of its own alerts and those covering it. A place whose nearest alerted ancestor already shows the
+ * same level is left out (a yellow raion in a yellow oblast); the rest are drawn with the polygons of their drawn
+ * descendants cut out, so a red raion in a yellow oblast is red, not the orange two translucent fills would blend to.
+ * Places without a polygon get a circle of the stated radius.
+ */
 export function buildAlertLayer(alerts: AlertDto[], regionsById: Map<number, RegionDto>, extra: Record<number, Geometry> = {}): FeatureCollection<Geometry, AlertProps> {
-  const features: Feature<Geometry, AlertProps>[] = []
+  const byPlace = new Map<number, AlertDto[]>()
   for (const a of alerts) {
-    const region = regionsById.get(a.placeId)
-    const geometry: Geometry | null = region
-      ? region.geometry
-      : extra[a.placeId]
-        ? extra[a.placeId]
-        : a.location?.point
-        ? circle(a.location.point.coordinates, Math.max(a.location.accuracyKm ?? 0, 20))
-        : null
+    const list = byPlace.get(a.placeId)
+    if (list) list.push(a)
+    else byPlace.set(a.placeId, [a])
+  }
+  const geometryOf = (placeId: number): Area | null => {
+    const region = regionsById.get(placeId)
+    if (region && isArea(region.geometry)) return region.geometry
+    const fetched = extra[placeId]
+    if (fetched && isArea(fetched)) return fetched
+    const loc = byPlace.get(placeId)?.find((a) => a.location?.point)?.location
+    return loc?.point ? circle(loc.point.coordinates, Math.max(loc.accuracyKm ?? 0, 20)) : null
+  }
+  // Alerts on the place and on its ancestors (nearest first) - what the place is under.
+  const covering = (placeId: number): AlertDto[] => {
+    const own = byPlace.get(placeId) ?? []
+    const list = [...own]
+    for (const id of own[0]?.ancestorIds ?? []) list.push(...(byPlace.get(id) ?? []))
+    return list
+  }
+  const level = new Map<number, AlertLevel>()
+  for (const placeId of byPlace.keys()) level.set(placeId, effectiveLevel(covering(placeId)) ?? 'Unknown')
+  const nearestAlertedAncestor = (placeId: number): number | undefined => (byPlace.get(placeId)?.[0]?.ancestorIds ?? []).find((id) => byPlace.has(id))
+  // Outer places first: a redundant inner one is dropped, a different one is drawn and cut from every drawn ancestor.
+  const drawn = [...byPlace.keys()].filter((placeId) => {
+    const parent = nearestAlertedAncestor(placeId)
+    return parent === undefined || level.get(parent) !== level.get(placeId)
+  })
+  const depth = (placeId: number) => byPlace.get(placeId)![0].ancestorIds.length
+  drawn.sort((a, b) => depth(a) - depth(b))
+  const features: Feature<Geometry, AlertProps>[] = []
+  for (const placeId of drawn) {
+    let geometry = geometryOf(placeId)
     if (!geometry) continue
+    for (const inner of drawn) {
+      if (inner === placeId || !byPlace.get(inner)![0].ancestorIds.includes(placeId)) continue
+      const hole = geometryOf(inner)
+      if (!hole) continue
+      const cut = difference({ type: 'FeatureCollection', features: [{ type: 'Feature', geometry, properties: {} }, { type: 'Feature', geometry: hole, properties: {} }] })
+      if (!cut) {
+        geometry = null
+        break
+      }
+      geometry = cut.geometry
+    }
+    if (!geometry) continue
+    const own = byPlace.get(placeId)!
+    const first = own.reduce((m, a) => (a.startedAt < m.startedAt ? a : m), own[0])
     features.push({
       type: 'Feature',
-      id: a.id,
+      id: first.id,
       geometry,
-      properties: { id: a.id, placeId: a.placeId, placeName: a.placeName, alertType: a.alertType, level: a.level ?? 'Unknown', startedAt: a.startedAt },
+      properties: { id: first.id, placeId, placeName: first.placeName, alertType: first.alertType, level: level.get(placeId)!, startedAt: first.startedAt },
     })
   }
   return { type: 'FeatureCollection', features }
+}
+
+function isArea(g: Geometry): g is Area {
+  return g.type === 'Polygon' || g.type === 'MultiPolygon'
 }
 
 export function emptyCollection(): FeatureCollection<Geometry, GeoJsonProperties> {

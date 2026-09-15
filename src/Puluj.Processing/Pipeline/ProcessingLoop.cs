@@ -1,53 +1,50 @@
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Puluj.Domain.Enums;
+using Puluj.Infrastructure;
 using Puluj.Infrastructure.Ingestion;
 using Puluj.Infrastructure.Messaging;
-using Puluj.Infrastructure.Persistence;
 using Puluj.Processing.Indexes;
 
 namespace Puluj.Processing.Pipeline;
 
 /// <summary>
-/// Single consumer of the raw-message queue. The queue is fed by NOTIFY (RawMessageStored from any collector or the
-/// admin panel, wherever they run) and by a sweep of RawMessages left Pending in the database (restart, crash,
-/// retry, a reprocess, a history load, a lost notification) so nothing is lost when the signal is. The sweep hands them over
-/// in publication order, oldest first, and keeps going without waiting while there is a backlog: a rebuild from the
-/// raw messages then replays the situation as it unfolded, whichever channel each message came from. While a history
-/// load is running (ReprocessService.PausedKey) the sweep waits, so the load's messages are not processed piecemeal.
+/// One processor instance: <see cref="ProcessingOptions.Concurrency"/> workers that claim raw messages from the database
+/// (<see cref="RawMessageClaims"/>) and process them, plus a housekeeping task. Any number of instances may run against
+/// the same database — a claim is an atomic status change on the row, so a message is processed exactly once wherever
+/// the instances live. A worker first takes an id announced over NOTIFY (RawMessageStored from any collector or the
+/// admin panel: a live message goes ahead of a backlog), otherwise the oldest-published Pending row (restart, crash,
+/// retry, a reprocess, a history load, a lost notification), so a rebuild replays the situation as it unfolded; with
+/// several workers the order holds up to a window of that many messages. While a history load is running
+/// (ReprocessService.PausedKey) nothing is claimed, so the load's messages are not processed piecemeal.
+/// The housekeeping task re-reads the pause flag and returns claims of dead instances to Pending.
 /// </summary>
 public sealed class ProcessingLoop(
     IRawMessageQueue queue,
     PgNotifyListener notifications,
     RawMessageProcessor processor,
+    RawMessageClaims claims,
+    ProcessorIdentity identity,
     IndexProvider indexes,
-    IDbContextFactory<PulujDbContext> factory,
     ReprocessService reprocess,
     IOptions<ProcessingOptions> options,
+    PulujMetrics metrics,
     ILogger<ProcessingLoop> logger) : BackgroundService
 {
+    private volatile string? _paused;
+
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         await indexes.Ready.WaitAsync(ct);
-        logger.LogInformation("Processing loop started");
-        var sweeper = SweepPendingAsync(ct);
-        var listener = ListenAsync(ct);
-        try
-        {
-            await foreach (var id in queue.DequeueAllAsync(ct))
-            {
-                await processor.ProcessAsync(id, ct);
-            }
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-        }
-        await Task.WhenAll(sweeper, listener);
+        _paused = await reprocess.PausedAsync(ct);
+        var concurrency = Math.Max(1, options.Value.Concurrency);
+        logger.LogInformation("Processing loop started: instance {Instance}, {Workers} worker(s), lease {Lease}", identity.Name, concurrency, options.Value.ClaimLease);
+        var tasks = new List<Task> { ListenAsync(ct), HousekeepAsync(ct) };
+        tasks.AddRange(Enumerable.Range(1, concurrency).Select(i => WorkAsync(i, ct)));
+        await Task.WhenAll(tasks);
     }
 
-    /// <summary>Queues every raw message announced over NOTIFY. An id queued twice (sweep + NOTIFY) is harmless: the processor skips non-Pending rows.</summary>
+    /// <summary>Queues every raw message announced over NOTIFY. A claim decides who processes it; a duplicate id is harmless.</summary>
     private async Task ListenAsync(CancellationToken ct)
     {
         try
@@ -65,89 +62,128 @@ public sealed class ProcessingLoop(
         }
     }
 
-    private async Task SweepPendingAsync(CancellationToken ct)
+    private async Task WorkAsync(int worker, CancellationToken ct)
     {
-        using var timer = new PeriodicTimer(options.Value.PendingPollInterval);
-        var pausedLogged = false;
-        while (!ct.IsCancellationRequested)
+        try
         {
-            var backlog = false;
-            try
+            while (!ct.IsCancellationRequested)
             {
-                var paused = await reprocess.PausedAsync(ct);
-                if (paused is not null)
+                if (_paused is not null)
                 {
-                    if (!pausedLogged)
+                    // Announced ids are dropped: they stay Pending in the database and are taken in order after the pause.
+                    while (queue.TryDequeue(out _))
                     {
-                        logger.LogInformation("Processing paused: {Reason}", paused);
                     }
-                    pausedLogged = true;
+                    await IdleAsync(ct);
+                    continue;
                 }
-                else
+                long? id = null;
+                try
                 {
-                    if (pausedLogged)
+                    if (queue.TryDequeue(out var announced))
                     {
-                        logger.LogInformation("Processing resumed");
-                    }
-                    pausedLogged = false;
-                    // Only hand over a new batch once the previous one is consumed: the same ids would otherwise be queued twice.
-                    if (queue.Depth == 0)
-                    {
-                        List<long> ids;
-                        await using (var db = await factory.CreateDbContextAsync(ct))
+                        id = await claims.ClaimAsync(announced, identity.Name, ct) ? announced : null;
+                        if (id is null)
                         {
-                            var max = options.Value.MaxAttempts;
-                            ids = await db.RawMessages.AsNoTracking()
-                                .Where(r => r.ProcessingStatus == ProcessingStatus.Pending && r.Attempts < max)
-                                .OrderBy(r => r.PublishedAt).ThenBy(r => r.RawMessageId)
-                                .Select(r => r.RawMessageId)
-                                .Take(options.Value.PendingBatchSize)
-                                .ToListAsync(ct);
+                            continue; // another instance took it, or it was already processed
                         }
-                        foreach (var id in ids)
-                        {
-                            await queue.EnqueueAsync(id, ct);
-                        }
-                        if (ids.Count > 0)
-                        {
-                            logger.LogDebug("Sweeper queued {Count} pending raw message(s)", ids.Count);
-                        }
-                        backlog = ids.Count >= options.Value.PendingBatchSize;
                     }
                     else
                     {
-                        backlog = true;
+                        id = await claims.ClaimOldestAsync(identity.Name, ct);
+                        if (id is null)
+                        {
+                            await IdleAsync(ct);
+                            continue;
+                        }
                     }
+                    await processor.ProcessAsync(id.Value, ct);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    if (id is { } claimed)
+                    {
+                        await ReleaseAsync(claimed);
+                    }
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    // ProcessAsync records its own failures; this is the claim itself (database away): back off a little.
+                    logger.LogWarning(ex, "Worker {Worker}: claim failed", worker);
+                    if (id is { } claimed)
+                    {
+                        await ReleaseAsync(claimed);
+                    }
+                    await Task.Delay(TimeSpan.FromSeconds(1), ct);
                 }
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+    }
+
+    /// <summary>Waits for the next announced id or the poll interval, whichever comes first.</summary>
+    private async Task IdleAsync(CancellationToken ct)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var signal = queue.WaitToReadAsync(linked.Token).AsTask();
+        var tick = Task.Delay(options.Value.PendingPollInterval, linked.Token);
+        await Task.WhenAny(signal, tick);
+        linked.Cancel();
+        try
+        {
+            await Task.WhenAll(signal, tick);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        ct.ThrowIfCancellationRequested();
+    }
+
+    private async Task ReleaseAsync(long id)
+    {
+        try
+        {
+            await claims.ReleaseAsync(id, identity.Name);
+            metrics.RawProcessed(identity.Name, "released");
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Could not release RawMessage {Id}; the lease sweep will return it", id);
+        }
+    }
+
+    private async Task HousekeepAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(options.Value.PendingPollInterval);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
             {
-                return;
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Pending sweep failed");
-            }
-            if (backlog)
-            {
-                // A backlog is drained as fast as the processor goes: look again as soon as the batch is consumed.
                 try
                 {
-                    while (queue.Depth > 0)
+                    var paused = await reprocess.PausedAsync(ct);
+                    if (paused != _paused)
                     {
-                        await Task.Delay(100, ct);
+                        logger.LogInformation(paused is null ? "Processing resumed" : "Processing paused: {Reason}", paused);
                     }
+                    _paused = paused;
+                    await claims.ReclaimExpiredAsync(ct);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
                     return;
                 }
-                continue;
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Processing housekeeping failed");
+                }
             }
-            if (!await timer.WaitForNextTickAsync(ct))
-            {
-                return;
-            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
         }
     }
 }

@@ -1,15 +1,31 @@
 <#
-.SYNOPSIS  Rebuilds and (re)starts Puluj.Worker, Puluj.Api (map, :5257) and Puluj.Admin (admin panel, :5258) in the
-           background for local development. Console output: $env:TEMP\puluj-{worker,api,admin}.log; the services also
+.SYNOPSIS  Rebuilds and (re)starts Puluj.Worker, Puluj.Api (map, :5257), Puluj.Admin (admin panel, :5258) and
+           Puluj.Analytics.Worker (source analytics, :5259) in the background for local development. Console output:
+           $env:TEMP\puluj-{worker,api,admin,analytics}.log; the services also
            write rolling files into <repo>\logs\ (the admin panel reads them). Use -Stop to only stop them.
            -Public builds both SPAs into the wwwroot folders and binds Api and Admin to all interfaces (LAN access,
            no Vite needed); the firewall rules for 5257/5258 are added once and need an elevated shell.
 #>
-param([switch]$Stop, [switch]$ResetDb, [switch]$Public)
+param([switch]$Stop, [switch]$ResetDb, [switch]$Public, [switch]$Force)
 $ErrorActionPreference = "Stop"
 $root = Resolve-Path "$PSScriptRoot\.."
-Get-Process -Name "Puluj.Api", "Puluj.Worker", "Puluj.Admin" -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-Process -Name "Puluj.Api", "Puluj.Worker", "Puluj.Admin", "Puluj.Analytics.Worker" -ErrorAction SilentlyContinue | Stop-Process -Force
 if ($Stop) { return }
+
+# The compose stack (deploy/) shares the database on :5432. A local Worker next to its processor replicas is only safe
+# when both are the same build (the store lock exists since AddRawMessageClaims; an older processor deadlocks the newer
+# one), and next to its Telegram collector it is never safe (one Telegram session). -Force skips the question.
+$docker = Get-Command docker -ErrorAction SilentlyContinue
+if (-not $docker -and (Test-Path "C:\Program Files\Docker\Docker\resources\bin\docker.exe")) { $docker = "C:\Program Files\Docker\Docker\resources\bin\docker.exe" }
+if ($docker -and -not $Force) {
+    $running = @(& $docker ps --format "{{.Names}}" 2>$null | Where-Object { $_ -match "^puluj-(processor|collector-telegram)" })
+    if ($running.Count -gt 0) {
+        Write-Warning "Docker containers over the same database are running: $($running -join ', ')."
+        Write-Warning "A local Worker with the processing role must be the same build as puluj-processor-* (else deadlocks); the telegram role clashes with puluj-collector-telegram-* (one session). Stop them (cd deploy; docker compose stop processor collector-telegram) or run with -Force."
+        $answer = Read-Host "Start anyway? [y/N]"
+        if ($answer -notmatch "^[yY]") { return }
+    }
+}
 if ($ResetDb) {
     $env:PGPASSWORD = "puluj"
     psql -h localhost -U puluj -d postgres -q -c "DROP DATABASE IF EXISTS puluj;" -c "CREATE DATABASE puluj;"
@@ -53,5 +69,8 @@ if ($apiBind) { $env:ASPNETCORE_URLS = $apiBind }
 Start-Process dotnet -ArgumentList $apiArgs -RedirectStandardOutput "$env:TEMP\puluj-api.log" -RedirectStandardError "$env:TEMP\puluj-api.err" -WindowStyle Hidden
 if ($adminBind) { $env:ASPNETCORE_URLS = $adminBind } else { Remove-Item Env:ASPNETCORE_URLS -ErrorAction SilentlyContinue }
 Start-Process dotnet -ArgumentList $adminArgs -RedirectStandardOutput "$env:TEMP\puluj-admin.log" -RedirectStandardError "$env:TEMP\puluj-admin.err" -WindowStyle Hidden
+# Source analytics service (own schema, :5259); the admin panel's "Аналітика" page reads what it builds.
+$env:ASPNETCORE_URLS = "http://localhost:5259"
+Start-Process dotnet -ArgumentList "run --no-build --no-launch-profile --project `"$root\src\Puluj.Analytics.Worker`"" -RedirectStandardOutput "$env:TEMP\puluj-analytics.log" -RedirectStandardError "$env:TEMP\puluj-analytics.err" -WindowStyle Hidden
 Remove-Item Env:ASPNETCORE_URLS -ErrorAction SilentlyContinue
 Write-Host "Started. Map: $apiUrl  Admin: $adminUrl  Frontend dev: cd web; npm run dev (map) / npm run dev:admin (admin)"

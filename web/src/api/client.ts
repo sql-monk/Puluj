@@ -1,5 +1,5 @@
 import type { Geometry } from 'geojson'
-import type { AlertDto, TargetDto, PlaceDto, PredecessorsDto, RegionDto, ReplayDto, SnapshotDto, SourceDto, TimelineBucketDto, TrackDetailsDto } from './types'
+import type { AlertDto, MapConfigDto, TargetDto, PlaceDto, PredecessorsDto, RegionDto, ReplayDto, SnapshotDto, SourceDto, StatsDto, TimelineBucketDto, TrackDetailsDto } from './types'
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(path, { headers: { Accept: 'application/json' } })
@@ -10,6 +10,8 @@ async function get<T>(path: string): Promise<T> {
 }
 
 export const api = {
+  /** The live windows (lifetime choices, feed depth) the server applies; the client prunes with the same numbers. */
+  mapConfig: () => get<MapConfigDto>('/api/map/config'),
   snapshot: (at?: Date, activeOnly = true) =>
     get<SnapshotDto>(`/api/snapshot?activeOnly=${activeOnly}${at ? `&at=${encodeURIComponent(at.toISOString())}` : ''}`),
   track: (id: number) => get<TrackDetailsDto>(`/api/tracks/${id}`),
@@ -31,6 +33,8 @@ export const api = {
   searchPlaces: (q: string) => get<PlaceDto[]>(`/api/places/search?q=${encodeURIComponent(q)}&limit=8`),
   /** Every track of a replay window with all its reported positions (one payload for the whole timelapse). */
   replay: (from: Date, to: Date) => get<ReplayDto>(`/api/replay?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`),
+  /** Every chart of the statistics page for one period (server-cached, the same for everyone). */
+  stats: (from: Date, to: Date) => get<StatsDto>(`/api/stats?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`),
   timeline: (from: Date, to: Date, bucketMinutes: number) =>
     get<TimelineBucketDto[]>(
       `/api/timeline?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}&bucketMinutes=${bucketMinutes}`,

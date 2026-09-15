@@ -42,6 +42,36 @@
       "config": { "channel": "kyivcityofficial", "language": "uk", "official": true, "homeRegion": "Київ" }
     },
     {
+      "code": "tg_monitoringwar",
+      "name": "monitorwar",
+      "type": "Telegram",
+      "url": "https://t.me/monitoringwar",
+      "trustLevel": 0.85,
+      "priority": 85,
+      "enabled": true,
+      "config": { "channel": "monitoringwar", "language": "uk", "official": false }
+    },
+    {
+      "code": "tg_strategicaviation",
+      "name": "Стратегічна авіація",
+      "type": "Telegram",
+      "url": "https://t.me/StrategicaviationT",
+      "trustLevel": 0.8,
+      "priority": 88,
+      "enabled": true,
+      "config": { "channel": "StrategicaviationT", "language": "uk", "official": false }
+    },
+    {
+      "code": "tg_eradarrua",
+      "name": "єРадар",
+      "type": "Telegram",
+      "url": "https://t.me/eRadarrua",
+      "trustLevel": 0.65,
+      "priority": 65,
+      "enabled": true,
+      "config": { "channel": "eRadarrua", "language": "uk", "official": false }
+    },
+    {
       "code": "tg_monitor_1",
       "name": "Моніторинговий канал (приклад)",
       "type": "Telegram",

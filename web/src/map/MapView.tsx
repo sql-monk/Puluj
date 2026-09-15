@@ -13,7 +13,7 @@ import { effectiveNow, useStore, type Theme } from '../store/useStore'
 import { getPalette } from './palette'
 import { replay } from '../replay/engine'
 import { buildAlertLayer, buildReplayLayers, buildTrackLayers, emptyCollection, visibleTracks } from './geojson'
-import { ATTRIBUTION, STYLE_DARK, STYLE_LIGHT, TRACK_HIT_LAYERS, addIcons, addTrackLayers, addTrackSources, alertPaint, pointerCursor, regionHover, hitAt, setData, setTrackData } from './layers'
+import { ATTRIBUTION, STYLE_DARK, STYLE_LIGHT, addIcons, addTrackLayers, addTrackSources, alertPaint, pointerCursor, regionHover, hitAt, setData, setTrackData, trackHover } from './layers'
 
 maplibregl.setWorkerUrl(maplibreWorkerUrl)
 
@@ -70,6 +70,10 @@ export default function MapView({ dark, theme, onPickHome, onDetails }: Props) {
   const regionsById = useMemo(() => new Map<number, RegionDto>(regions.map((r) => [r.id, r])), [regions])
   const regionsRef = useRef(regionsById)
   regionsRef.current = regionsById
+  // The alert fill (one feature per alerted place, nested polygons cut out) is rebuilt only when alerts change:
+  // the apply effect below runs on every clock tick and track update.
+  const alertList = useMemo(() => (filters.alerts ? Object.values(alerts) : []), [alerts, filters.alerts])
+  const alertLayer = useMemo(() => buildAlertLayer(alertList, regionsById, placeGeometries), [alertList, regionsById, placeGeometries])
 
   useEffect(() => {
     if (!container.current || mapRef.current) return
@@ -110,11 +114,16 @@ export default function MapView({ dark, theme, onPickHome, onDetails }: Props) {
       const regionId = ob?.layer.id === 'alerts-fill' ? ob.properties?.placeId : ob?.properties?.id
       selectRegion(regionId === undefined ? null : Number(regionId))
     })
-    pointerCursor(map, [...TRACK_HIT_LAYERS, 'raions-fill', 'oblasts-fill', 'alerts-fill'])
+    const regionLayers = ['raions-fill', 'oblasts-fill', 'alerts-fill']
+    pointerCursor(map, regionLayers)
+    // Target under the cursor (within the hit radius): enlarged glyph, pointer cursor. Registered before the region
+    // hover, whose resolver reads its state on the same mousemove.
+    const hover = trackHover(map, { fallbackLayers: regionLayers, enabled: () => !pickRef.current })
     // Hover: the raion under the cursor with its oblast; the oblast alone where no raion polygon is drawn. An alerted
     // oblast is only hit through its alert fill (placeId = the oblast), which sits above the raion fill, so the raion
-    // is looked for among every hit before an oblast is accepted.
-    const stopHover = regionHover(map, tip.current!, ['raions-fill', 'oblasts-fill', 'alerts-fill'], (hits) => {
+    // is looked for among every hit before an oblast is accepted. No region tip while a target is hovered.
+    const stopHover = regionHover(map, tip.current!, regionLayers, (hits) => {
+      if (hover.current() !== null) return null
       const byId = regionsRef.current
       const regionsHit = hits.map((hit) => byId.get(Number(hit.layer.id === 'alerts-fill' ? hit.properties?.placeId : hit.properties?.id))).filter((r): r is RegionDto => !!r)
       const region = regionsHit.find((r) => r.level === 'District') ?? regionsHit.find((r) => r.level === 'Region' || r.level === 'City')
@@ -127,6 +136,7 @@ export default function MapView({ dark, theme, onPickHome, onDetails }: Props) {
     mapRef.current = map
     setMapInstance(map)
     return () => {
+      hover.stop()
       stopHover()
       map.remove()
       mapRef.current = null
@@ -164,10 +174,9 @@ export default function MapView({ dark, theme, onPickHome, onDetails }: Props) {
       else setTrackData(map, buildTrackLayers(visibleTracks(tracks, filters, clock), clock, regionsById, filters, { home, selectedId: selectedTrackId, palette, predecessors, selectedLink }))
       // An alerted oblast is drawn by the alert layer instead of the base fill, so the colours never blend;
       // raion / hromada alerts sit on top of the land fill. Hromada and city polygons are fetched on first need.
-      const alertList = filters.alerts ? Object.values(alerts) : []
       for (const a of alertList) if (!regionsById.has(a.placeId) && !placeGeometries[a.placeId]) ensurePlaceGeometry(a.placeId)
       const alerted = new Set(alertList.filter((a) => regionsById.get(a.placeId)?.level === 'Region' || regionsById.get(a.placeId)?.level === 'City').map((a) => a.placeId))
-      setData(map, 'alerts', buildAlertLayer(alertList, regionsById, placeGeometries))
+      setData(map, 'alerts', alertLayer)
       // Raions of the 2020 reform: thin outlines, and the click target for the region window.
       const raions = regions.filter((r) => r.level === 'District' && r.countryCode === 'UA' && r.parentId !== undefined && regionsById.get(r.parentId)?.level === 'Region')
       setData(map, 'raions', { type: 'FeatureCollection', features: raions.map((r) => ({ type: 'Feature', geometry: r.geometry, properties: { id: r.id, name: r.name } })) })
@@ -182,7 +191,7 @@ export default function MapView({ dark, theme, onPickHome, onDetails }: Props) {
     }
     if (styleLoaded.current) apply()
     else map.once('style.load', apply)
-  }, [mode, tracks, alerts, regions, regionsById, filters, home, clock, selectedRegionId, selectedTrackId, selectedLink, palette, predecessors, placeGeometries, ensurePlaceGeometry])
+  }, [mode, tracks, alertList, alertLayer, regions, regionsById, filters, home, clock, selectedRegionId, selectedTrackId, selectedLink, palette, predecessors, placeGeometries, ensurePlaceGeometry])
 
   // Replay: every frame of the replay clock moves the markers, straight into the source, without a render.
   useEffect(() => {

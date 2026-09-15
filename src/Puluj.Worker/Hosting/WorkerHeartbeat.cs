@@ -10,7 +10,7 @@ namespace Puluj.Worker.Hosting;
 /// </summary>
 public sealed class WorkerHeartbeat(SettingsStore settings, IOptions<WorkerOptions> options, TimeProvider clock, ILogger<WorkerHeartbeat> logger) : BackgroundService
 {
-    private string StatusKey => $"Worker:{options.Value.Name}:Heartbeat";
+    private string StatusKey => $"Worker:{options.Value.InstanceName}:Heartbeat";
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {

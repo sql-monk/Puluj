@@ -11,7 +11,7 @@ import { effectiveNow, useStore, type Theme } from '../store/useStore'
 import { getPalette } from './palette'
 import { replay } from '../replay/engine'
 import { buildAlertLayer, buildReplayLayers, buildTrackLayers, emptyCollection, isPolygonAlert, visibleTracks } from './geojson'
-import { ATTRIBUTION, STYLE_DARK, STYLE_LIGHT, TEXT_FONT, TRACK_HIT_LAYERS, addIcons, addTrackLayers, addTrackSources, alertPaint, pointerCursor, regionHover, hitAt, setData, setTrackData } from './layers'
+import { ATTRIBUTION, STYLE_DARK, STYLE_LIGHT, TEXT_FONT, addIcons, addTrackLayers, addTrackSources, alertPaint, pointerCursor, regionHover, hitAt, setData, setTrackData, trackHover } from './layers'
 
 /** The city itself; the view opens on it with a margin of surroundings. */
 const KYIV_BOUNDS: [[number, number], [number, number]] = [
@@ -79,6 +79,9 @@ export default function KyivMapView({ dark, theme, onDetails }: Props) {
   regionsRef.current = regionsById
   const kyiv = useMemo(() => regions.find((r) => r.level === 'City' && r.countryCode === 'UA' && r.name === 'Київ'), [regions])
   const districts = useMemo(() => regions.filter((r) => r.level === 'District' && r.parentId === kyiv?.id), [regions, kyiv])
+  // The alert fill is rebuilt only when alerts change (the apply effect runs on every clock tick).
+  const alertList = useMemo(() => (filters.alerts ? Object.values(alerts) : []), [alerts, filters.alerts])
+  const alertLayer = useMemo(() => buildAlertLayer(alertList, regionsById, placeGeometries), [alertList, regionsById, placeGeometries])
 
   useEffect(() => {
     if (!container.current || mapRef.current) return
@@ -120,9 +123,13 @@ export default function KyivMapView({ dark, theme, onDetails }: Props) {
       const alert = map.queryRenderedFeatures(e.point, { layers: ['alerts-fill'] })[0]?.properties?.placeId
       selectRegion(alert === undefined ? null : Number(alert))
     })
-    pointerCursor(map, [...TRACK_HIT_LAYERS, 'districts-hit', 'alerts-fill'])
-    // Hover: the city district under the cursor (the hit fill covers the districts even under an alert fill).
+    pointerCursor(map, ['districts-hit', 'alerts-fill'])
+    // Target under the cursor (within the hit radius): enlarged glyph, pointer cursor; registered before the district hover.
+    const hover = trackHover(map, { fallbackLayers: ['districts-hit', 'alerts-fill'] })
+    // Hover: the city district under the cursor (the hit fill covers the districts even under an alert fill); no tip
+    // while a target is hovered.
     const stopHover = regionHover(map, tip.current!, ['districts-hit'], (hits) => {
+      if (hover.current() !== null) return null
       const id = Number(hits[0]?.properties?.id)
       const district = regionsRef.current.get(id)
       return district ? { id, geometry: district.geometry, label: district.name } : null
@@ -131,6 +138,7 @@ export default function KyivMapView({ dark, theme, onDetails }: Props) {
     mapRef.current = map
     setMapInstance(map)
     return () => {
+      hover.stop()
       stopHover()
       map.remove()
       mapRef.current = null
@@ -167,10 +175,9 @@ export default function KyivMapView({ dark, theme, onDetails }: Props) {
       const only = <G extends Geometry, P>(fc: FeatureCollection<G, P>): FeatureCollection<G, P> => ({ type: 'FeatureCollection', features: fc.features.filter((f) => near.has(Number((f.properties as { id: number }).id))) })
       setTrackData(map, { points: only(layers.points), fixes: only(layers.fixes), forecasts: only(layers.forecasts), areas: only(layers.areas), predecessors: only(layers.predecessors) })
 
-      const alertList = filters.alerts ? Object.values(alerts) : []
       for (const a of alertList) if (!regionsById.has(a.placeId) && !placeGeometries[a.placeId]) ensurePlaceGeometry(a.placeId)
       const alerted = new Set(alertList.filter((a) => isPolygonAlert(a, regionsById, placeGeometries)).map((a) => a.placeId))
-      setData(map, 'alerts', buildAlertLayer(alertList, regionsById, placeGeometries))
+      setData(map, 'alerts', alertLayer)
       setData(map, 'kyiv', kyiv ? { type: 'FeatureCollection', features: [{ type: 'Feature', geometry: kyiv.geometry, properties: {} }] } : emptyCollection())
       const cityAlerted = kyiv ? alerted.has(kyiv.id) : false
       setData(map, 'districts', {
@@ -190,7 +197,7 @@ export default function KyivMapView({ dark, theme, onDetails }: Props) {
     }
     if (styleLoaded.current) apply()
     else map.once('style.load', apply)
-  }, [mode, tracks, alerts, regions, regionsById, kyiv, districts, filters, home, clock, selectedRegionId, selectedTrackId, selectedLink, palette, predecessors, placeGeometries, ensurePlaceGeometry])
+  }, [mode, tracks, alertList, alertLayer, regions, regionsById, kyiv, districts, filters, home, clock, selectedRegionId, selectedTrackId, selectedLink, palette, predecessors, placeGeometries, ensurePlaceGeometry])
 
   // Replay: every frame of the replay clock moves the markers, straight into the source, without a render.
   useEffect(() => {

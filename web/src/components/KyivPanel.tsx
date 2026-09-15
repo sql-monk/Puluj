@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { alertsFor, effectiveLevel, levelTone } from '../lib/alerts'
 import { useStore, type Filters } from '../store/useStore'
 import Legend from './Legend'
 
@@ -32,15 +33,14 @@ export default function KyivPanel({ open, onClose }: { open: boolean; onClose: (
     [regions, kyiv],
   )
   const active = useMemo(() => Object.values(alerts).filter((a) => !a.endedAt), [alerts])
-  const cityLevel = kyiv ? active.find((a) => a.placeId === kyiv.id)?.level : undefined
+  // The city-wide alert (the level of Kyiv itself); districts are under it too.
+  const cityLevel = kyiv ? levelTone(effectiveLevel(active.filter((a) => a.placeId === kyiv.id))) : null
   const since = now.getTime() - RECENT_MS
   const recent = (placeId: number) => targets.filter((o) => new Date(o.observedAt).getTime() >= since && (o.location?.placeId === placeId || o.destination?.placeId === placeId)).length
 
   const rows = districts.map((d) => {
-    const own = active.find((a) => a.placeId === d.id)?.level
-    // Any non-yellow alert (red or unlevelled) on the district or the whole city counts as a full alert.
-    const levels = [own, cityLevel].filter((l): l is NonNullable<typeof l> => !!l)
-    const level: 'red' | 'yellow' | null = levels.some((l) => l !== 'Yellow') ? 'red' : levels.length > 0 ? 'yellow' : null
+    // The district's own alerts and the city-wide one, at their effective level (a published level beats none).
+    const level = levelTone(effectiveLevel(alertsFor(active, d.id, kyiv ? [kyiv.id] : [])))
     return { id: d.id, name: d.name.replace(' район', ''), level, recent: recent(d.id) }
   })
 
@@ -68,7 +68,7 @@ export default function KyivPanel({ open, onClose }: { open: boolean; onClose: (
               className={`text-xs ${selectedRegionId === kyiv.id ? 'font-medium text-blue-700 dark:text-blue-300' : 'text-slate-500 hover:underline'}`}
               onClick={() => selectRegion(kyiv.id)}
             >
-              усе місто {cityLevel && chip(cityLevel === 'Yellow' ? 'yellow' : 'red')}
+              усе місто {cityLevel && chip(cityLevel)}
             </button>
           )}
           <button className="ml-2 rounded px-1.5 py-0.5 text-base leading-none text-slate-400 hover:bg-slate-200 hover:text-slate-700 dark:hover:bg-slate-700 dark:hover:text-slate-200" onClick={onClose} title="Згорнути панель" aria-label="Згорнути панель">

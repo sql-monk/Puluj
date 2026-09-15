@@ -14,7 +14,7 @@ builder.Configuration.AddPulujDatabaseSettings(); // values from the admin UI ov
 // Roles decide which hosted services this process runs (one image, several containers; see WorkerOptions).
 var worker = builder.Configuration.GetSection(WorkerOptions.Section).Get<WorkerOptions>() ?? new WorkerOptions();
 var roles = worker.RoleSet;
-var appName = $"puluj-{worker.Name}";
+var appName = $"puluj-{worker.InstanceName}";
 
 builder.Services.AddSerilog((sp, cfg) => cfg
     .ReadFrom.Configuration(builder.Configuration)
@@ -39,7 +39,7 @@ if (!worker.MigrateOnly)
 }
 if (roles.Contains(WorkerOptions.Processing))
 {
-    builder.Services.AddPulujProcessing(builder.Configuration);
+    builder.Services.AddPulujProcessing(builder.Configuration, worker.InstanceName);
 }
 var collectors = new List<string>();
 if (roles.Contains(WorkerOptions.Telegram))

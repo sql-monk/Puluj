@@ -1,8 +1,11 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Npgsql;
 using Puluj.Domain.Entities;
 using Puluj.Domain.Enums;
 using Puluj.Infrastructure;
@@ -24,7 +27,13 @@ public interface ITargetSink
 
 /// <summary>
 /// Processes one RawMessage end-to-end (spec §4): structured payload or text -> facts -> targets -> sink.
-/// All writes for a message happen in one transaction; failures are recorded in ProcessingError and retried up to MaxAttempts.
+/// All writes for a message happen in one transaction that holds the raw_messages row lock from its first statement:
+/// every status decision (process, skip, fail) is made under that lock, so an expired-claim sweep or another instance
+/// that re-claimed the row waits and then sees what this transaction decided. Parsing runs in parallel across workers
+/// and instances; the store stage (targets and their triggers, sinks) runs under AdvisoryLocks.Store, one message at a
+/// time, so correlation and deduplication never race. Failures are recorded in ProcessingError and retried up to MaxAttempts;
+/// a transient database failure (a deadlock with a writer that does not hold the store lock, a serialization failure)
+/// is retried without counting, up to MaxTransientRetries per message.
 /// </summary>
 public sealed class RawMessageProcessor(
     IDbContextFactory<PulujDbContext> factory,
@@ -36,46 +45,65 @@ public sealed class RawMessageProcessor(
     IEnumerable<ITargetSink> sinks,
     INotifyPublisher notifier,
     IOptions<ProcessingOptions> options,
+    ProcessorIdentity identity,
     PulujMetrics metrics,
     TimeProvider clock,
     ILogger<RawMessageProcessor> logger)
 {
+    private const string Savepoint = "message";
+    private readonly ConcurrentDictionary<long, int> _transientRetries = new();
+
+    /// <summary>
+    /// Processes the message if it is Pending (a direct call: tests, a dev scenario) or InProgress and claimed by this
+    /// instance (the processing loop); anything else — taken by another instance, already done — is skipped with 0.
+    /// </summary>
     public async Task<int> ProcessAsync(long rawMessageId, CancellationToken ct)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await db.Database.ExecuteSqlInterpolatedAsync($"SELECT raw_message_id FROM raw_messages WHERE raw_message_id = {rawMessageId} FOR UPDATE", ct);
         var raw = await db.RawMessages.Include(r => r.Source).FirstOrDefaultAsync(r => r.RawMessageId == rawMessageId, ct);
-        if (raw is null || raw.ProcessingStatus != ProcessingStatus.Pending)
+        if (raw is null || !OwnedByMe(raw))
         {
             return 0;
         }
         var source = raw.Source!;
         var sw = Stopwatch.StartNew();
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await tx.CreateSavepointAsync(Savepoint, ct);
         try
         {
             List<Target> targets;
+            long parsedMs, lockedMs;
             if (AlertsInUaHandler.CanHandle(raw))
             {
+                await db.Database.ExecuteSqlInterpolatedAsync(AdvisoryLocks.Take(AdvisoryLocks.Store), ct); // the handler reads and updates air_alerts
+                parsedMs = 0;
+                lockedMs = sw.ElapsedMilliseconds;
                 targets = await alertsHandler.HandleAsync(db, raw, source, ct);
             }
             else if (!string.IsNullOrWhiteSpace(raw.RawText))
             {
                 targets = await ParseTextAsync(raw, source, ct);
+                parsedMs = sw.ElapsedMilliseconds;
+                await db.Database.ExecuteSqlInterpolatedAsync(AdvisoryLocks.Take(AdvisoryLocks.Store), ct);
+                lockedMs = sw.ElapsedMilliseconds;
             }
             else
             {
                 raw.ProcessingStatus = ProcessingStatus.Skipped;
                 raw.ProcessedAt = clock.GetUtcNow();
+                Stamp(raw);
                 await db.SaveChangesAsync(ct);
                 await tx.CommitAsync(ct);
+                metrics.RawProcessed(identity.Name, "skipped");
                 return 0;
             }
 
-            var parsedMs = sw.ElapsedMilliseconds;
             db.Targets.AddRange(targets);
             raw.ProcessingStatus = ProcessingStatus.Processed;
             raw.ProcessedAt = clock.GetUtcNow();
             raw.Attempts++;
+            Stamp(raw);
             await db.SaveChangesAsync(ct);
 
             var events = new List<PulujEvent>();
@@ -85,7 +113,13 @@ public sealed class RawMessageProcessor(
             }
             await db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
-            logger.LogDebug("RawMessage {Id}: parse {ParseMs} ms, store + sinks {SinkMs} ms", raw.RawMessageId, parsedMs, sw.ElapsedMilliseconds - parsedMs);
+            var storeMs = sw.ElapsedMilliseconds - lockedMs;
+            _transientRetries.TryRemove(raw.RawMessageId, out _);
+            // Lock wait close to store time means the store lock is the ceiling: the workers spend their time queued for it.
+            logger.LogDebug("RawMessage {Id}: parse {ParseMs} ms, lock wait {LockMs} ms, store + sinks {SinkMs} ms", raw.RawMessageId, parsedMs, lockedMs - parsedMs, storeMs);
+            metrics.ProcessingStage("parse", parsedMs);
+            metrics.ProcessingStage("lock", lockedMs - parsedMs);
+            metrics.ProcessingStage("store", storeMs);
             foreach (var evt in events)
             {
                 await notifier.PublishAsync(evt, ct);
@@ -100,6 +134,7 @@ public sealed class RawMessageProcessor(
             {
                 metrics.TargetCreated(source.Code, o.IdentificationMethod.ToString());
             }
+            metrics.RawProcessed(identity.Name, "processed");
             logger.LogInformation("RawMessage {Id} ({Source}): {Count} target(s) in {Ms} ms", raw.RawMessageId, source.Code, targets.Count, sw.ElapsedMilliseconds);
             return targets.Count;
         }
@@ -109,9 +144,22 @@ public sealed class RawMessageProcessor(
         }
         catch (Exception ex)
         {
-            await tx.RollbackAsync(CancellationToken.None);
-            await RecordFailureAsync(rawMessageId, source, ex);
+            await RecordFailureAsync(db, tx, raw, ex);
             return 0;
+        }
+    }
+
+    private bool OwnedByMe(RawMessage raw) =>
+        raw.ProcessingStatus == ProcessingStatus.Pending
+        || (raw.ProcessingStatus == ProcessingStatus.InProgress && raw.ClaimedBy == identity.Name);
+
+    /// <summary>Provenance: which instance handled the message. A direct call on a Pending row claims it here.</summary>
+    private void Stamp(RawMessage raw)
+    {
+        if (raw.ClaimedBy != identity.Name)
+        {
+            raw.ClaimedBy = identity.Name;
+            raw.ClaimedAt = clock.GetUtcNow();
         }
     }
 
@@ -154,35 +202,84 @@ public sealed class RawMessageProcessor(
         return null;
     }
 
-    private async Task RecordFailureAsync(long rawMessageId, Source source, Exception ex)
+    /// <summary>
+    /// Rolls the message's work back to the savepoint and, still under the row lock, counts the attempt: back to Pending
+    /// for another try by any instance, or Failed after MaxAttempts. The attempt count cannot be lost to a concurrent
+    /// writer because nobody else can touch the row until this commits.
+    /// </summary>
+    private async Task RecordFailureAsync(PulujDbContext db, IDbContextTransaction tx, RawMessage raw, Exception ex)
     {
-        metrics.ProcessingError("process");
-        logger.LogError(ex, "RawMessage {Id} failed", rawMessageId);
+        var transient = TransientCause(ex);
+        if (transient is not null && _transientRetries.AddOrUpdate(raw.RawMessageId, 1, (_, n) => n + 1) > options.Value.MaxTransientRetries)
+        {
+            transient = null; // keeps colliding: from here on it is a failure like any other
+        }
+        var attempts = transient is null ? raw.Attempts + 1 : raw.Attempts;
+        var failed = transient is null && attempts >= options.Value.MaxAttempts;
+        var now = clock.GetUtcNow();
+        if (transient is null)
+        {
+            metrics.ProcessingError("process");
+            logger.LogError(ex, "RawMessage {Id} failed", raw.RawMessageId);
+        }
+        else
+        {
+            metrics.ProcessingError("transient");
+            logger.LogWarning("RawMessage {Id}: transient database failure {SqlState} ({Message}); back to Pending, attempt not counted", raw.RawMessageId, transient.SqlState, transient.MessageText);
+        }
         try
         {
-            await using var db = await factory.CreateDbContextAsync();
-            var raw = await db.RawMessages.FirstAsync(r => r.RawMessageId == rawMessageId);
-            raw.Attempts++;
-            if (raw.Attempts >= options.Value.MaxAttempts)
+            await tx.RollbackToSavepointAsync(Savepoint, CancellationToken.None);
+            db.ChangeTracker.Clear();
+            if (transient is not null)
             {
-                raw.ProcessingStatus = ProcessingStatus.Failed;
-                raw.ProcessedAt = clock.GetUtcNow();
+                await db.Database.ExecuteSqlInterpolatedAsync(
+                    $"UPDATE raw_messages SET processing_status = {(int)ProcessingStatus.Pending}, claimed_by = NULL, claimed_at = NULL WHERE raw_message_id = {raw.RawMessageId}",
+                    CancellationToken.None);
+            }
+            else if (failed)
+            {
+                await db.Database.ExecuteSqlInterpolatedAsync(
+                    $"UPDATE raw_messages SET attempts = {attempts}, processing_status = {(int)ProcessingStatus.Failed}, processed_at = {now}, claimed_by = {identity.Name}, claimed_at = coalesce(claimed_at, {now}) WHERE raw_message_id = {raw.RawMessageId}",
+                    CancellationToken.None);
+            }
+            else
+            {
+                await db.Database.ExecuteSqlInterpolatedAsync(
+                    $"UPDATE raw_messages SET attempts = {attempts}, processing_status = {(int)ProcessingStatus.Pending}, claimed_by = NULL, claimed_at = NULL WHERE raw_message_id = {raw.RawMessageId}",
+                    CancellationToken.None);
             }
             db.ProcessingErrors.Add(new ProcessingError
             {
-                RawMessageId = rawMessageId,
-                SourceId = source.SourceId,
-                Stage = "process",
-                Message = ex.Message,
-                Exception = ex.ToString(),
-                OccurredAt = clock.GetUtcNow(),
+                RawMessageId = raw.RawMessageId,
+                SourceId = raw.SourceId,
+                Stage = transient is null ? "process" : "transient",
+                Message = transient is null ? ex.Message : $"{transient.SqlState}: {transient.MessageText}",
+                Exception = transient is null ? ex.ToString() : null,
+                OccurredAt = now,
             });
-            await db.SaveChangesAsync();
+            await db.SaveChangesAsync(CancellationToken.None);
+            await tx.CommitAsync(CancellationToken.None);
+            metrics.RawProcessed(identity.Name, transient is not null ? "retried_transient" : failed ? "failed" : "retried");
         }
         catch (Exception inner)
         {
-            logger.LogError(inner, "Could not record processing error for RawMessage {Id}", rawMessageId);
+            // The transaction is disposed by the caller (rollback): the row stays InProgress and the lease sweep returns it.
+            logger.LogError(inner, "Could not record processing error for RawMessage {Id}", raw.RawMessageId);
         }
+    }
+
+    /// <summary>The PostgreSQL error behind the exception when it is one another try can fix (40001, 40P01, 55P03, connection loss).</summary>
+    internal static PostgresException? TransientCause(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException)
+        {
+            if (e is PostgresException pg)
+            {
+                return pg.IsTransient ? pg : null;
+            }
+        }
+        return null;
     }
 
     private static string Truncate(string? s, int max) => s is null ? "" : s.Length <= max ? s : s[..max] + "…";

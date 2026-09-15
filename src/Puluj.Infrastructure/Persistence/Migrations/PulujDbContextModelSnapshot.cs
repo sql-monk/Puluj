@@ -75,9 +75,15 @@ namespace Puluj.Infrastructure.Persistence.Migrations
                     b.HasKey("AirAlertId")
                         .HasName("pk_air_alerts");
 
+                    b.HasIndex("EndRawMessageId")
+                        .HasDatabaseName("ix_air_alerts_end_raw_message_id");
+
                     b.HasIndex("PlaceId")
                         .HasDatabaseName("ix_air_alerts_place_id")
                         .HasFilter("ended_at IS NULL");
+
+                    b.HasIndex("StartRawMessageId")
+                        .HasDatabaseName("ix_air_alerts_start_raw_message_id");
 
                     b.HasIndex("StartedAt")
                         .HasDatabaseName("ix_air_alerts_started_at");
@@ -321,6 +327,15 @@ namespace Puluj.Infrastructure.Persistence.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("attempts");
 
+                    b.Property<DateTimeOffset?>("ClaimedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("claimed_at");
+
+                    b.Property<string>("ClaimedBy")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("claimed_by");
+
                     b.Property<string>("Hash")
                         .IsRequired()
                         .HasMaxLength(64)
@@ -390,6 +405,10 @@ namespace Puluj.Infrastructure.Persistence.Migrations
                     b.HasIndex("SourceId", "SourceMessageId")
                         .IsUnique()
                         .HasDatabaseName("ix_raw_messages_source_id_source_message_id");
+
+                    b.HasIndex(new[] { "ClaimedAt" }, "ix_raw_messages_in_progress_claimed_at")
+                        .HasDatabaseName("ix_raw_messages_in_progress_claimed_at")
+                        .HasFilter("processing_status = 4");
 
                     b.HasIndex(new[] { "PublishedAt" }, "ix_raw_messages_pending_published")
                         .HasDatabaseName("ix_raw_messages_pending_published")

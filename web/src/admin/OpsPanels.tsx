@@ -8,6 +8,7 @@ const SERVICE_LABEL: Record<string, string> = {
   'worker:processor': 'Processor (обробка повідомлень)',
   'worker:collector-telegram': 'Колектор Telegram',
   'worker:collector-alerts': 'Колектор alerts.in.ua',
+  'worker:analytics': 'Analytics (аналітика джерел)',
   api: 'Api (карта, публічна частина)',
   admin: 'Admin (ця панель)',
   collectors: 'Колектори джерел',

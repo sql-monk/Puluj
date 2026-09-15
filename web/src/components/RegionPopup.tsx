@@ -2,6 +2,7 @@ import type * as maplibregl from 'maplibre-gl'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
 import type { AlertDto } from '../api/types'
+import { alertsFor, ancestorsOf, effectiveLevel, levelTone } from '../lib/alerts'
 import { clock, dateTime } from '../lib/format'
 import { placeWindow, useDraggable } from '../lib/useDraggable'
 import { useStore } from '../store/useStore'
@@ -28,14 +29,21 @@ function duration(ms: number): string {
 }
 
 /**
- * The region window: opens at the click on an oblast. With an alert on: its type, level, when it started and how long
- * it has lasted. Without: when the last one ended. Either way: how many alerts and how much alert time in the last 24 h.
+ * The region window: opens at the click on an oblast, raion or city district. With an alert on: its type, level, when
+ * it started and how long it has lasted. Without: when the last one ended. Either way: how many alerts and how much
+ * alert time in the last 24 h. "An alert on" is hierarchical: on the place, on a place covering it (a city-wide alert
+ * over a Kyiv district, an oblast-wide one over a raion) or on a place inside it (a raion or hromada of the oblast).
  */
 export default function RegionPopup({ map, placeId, anchor, onClose }: Props) {
-  const region = useStore((s) => s.regions.find((r) => r.id === placeId))
+  const regions = useStore((s) => s.regions)
+  const region = useMemo(() => regions.find((r) => r.id === placeId), [regions, placeId])
   const alerts = useStore((s) => s.alerts)
   // Derived in a memo: a selector returning a fresh array every call would re-render the popup on every store tick.
-  const live = useMemo(() => Object.values(alerts).filter((a) => !a.endedAt && (a.placeId === placeId || a.location?.regionId === placeId)), [alerts, placeId])
+  const live = useMemo(() => {
+    const open = Object.values(alerts).filter((a) => !a.endedAt)
+    const regionsById = new Map(regions.map((r) => [r.id, r]))
+    return alertsFor(open, placeId, ancestorsOf(placeId, regionsById, open))
+  }, [alerts, regions, placeId])
   const now = useStore((s) => s.now)
   const el = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
@@ -58,7 +66,7 @@ export default function RegionPopup({ map, placeId, anchor, onClose }: Props) {
     }
   }, [map, lon, lat])
 
-  // Reloaded when an alert of this region starts or ends (live list changes).
+  // Reloaded when an alert concerning this place starts or ends (live list changes).
   const liveKey = live.map((a) => a.id).join(',')
   useEffect(() => {
     let cancelled = false
@@ -94,7 +102,7 @@ export default function RegionPopup({ map, placeId, anchor, onClose }: Props) {
   const stats = useMemo(() => {
     if (!history) return null
     const since = now.getTime() - DAY_MS
-    // Oblast-level and raion-level alerts overlap in time: the total is the union of their intervals, not the sum.
+    // Alerts on the place, covering it and inside it overlap in time: the total is the union of their intervals, not the sum.
     const spans = history
       .map((a) => [Math.max(new Date(a.startedAt).getTime(), since), a.endedAt ? new Date(a.endedAt).getTime() : now.getTime()] as [number, number])
       .filter(([s, e]) => e >= since && e > s)
@@ -114,28 +122,47 @@ export default function RegionPopup({ map, placeId, anchor, onClose }: Props) {
     return { count, total, last }
   }, [history, now])
 
-  // The region's own alert first, then raion-level ones inside it.
-  const current = live.find((a) => a.placeId === placeId) ?? live[0]
+  // The place's own alert first, then the one covering it, then those inside it (alertsFor's order); the level shown
+  // is the effective one over all of them, the colour the map paints this place with.
+  const current = live[0] as AlertDto | undefined
+  const level = effectiveLevel(live)
+  const tone = levelTone(level)
+  // Other places among the live alerts (the covering oblast, raions inside): named, "без рівня" for an unlevelled one.
+  const others = useMemo(() => {
+    const names: string[] = []
+    for (const a of live) {
+      if (a.placeId === placeId) continue
+      const name = a.level === 'Unknown' ? `${a.placeName} (без рівня)` : a.placeName
+      if (!names.includes(name)) names.push(name)
+    }
+    return names
+  }, [live, placeId])
+  const title = region?.name ?? live.find((a) => a.placeId === placeId)?.placeName ?? history?.find((a) => a.placeId === placeId)?.placeName ?? `Регіон #${placeId}`
 
   return (
     <div ref={el} className="pointer-events-auto absolute z-20 rounded-lg bg-white/95 text-xs shadow-xl backdrop-blur dark:bg-slate-900/95 dark:text-slate-100" style={{ width: WIDTH, left: -9999, top: -9999 }} onClick={(e) => e.stopPropagation()}>
       <div className={`flex items-start justify-between gap-2 px-2.5 pt-2 ${drag.handleProps.className}`} onPointerDown={drag.handleProps.onPointerDown} title={drag.handleProps.title}>
-        <div className="text-sm font-semibold">{region?.name ?? `Регіон #${placeId}`}</div>
+        <div className="text-sm font-semibold">{title}</div>
         <button className="shrink-0 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200" onClick={onClose} aria-label="Закрити">
           ✕
         </button>
       </div>
       <div className="px-2.5 pb-2.5 pt-1">
         {current ? (
-          <div className={`mb-2 rounded px-2 py-1.5 ${current.level === 'Yellow' ? 'bg-yellow-100 text-yellow-900 dark:bg-yellow-900/40 dark:text-yellow-100' : 'bg-red-100 text-red-900 dark:bg-red-900/40 dark:text-red-100'}`}>
+          <div className={`mb-2 rounded px-2 py-1.5 ${tone === 'yellow' ? 'bg-yellow-100 text-yellow-900 dark:bg-yellow-900/40 dark:text-yellow-100' : 'bg-red-100 text-red-900 dark:bg-red-900/40 dark:text-red-100'}`}>
             <div className="font-semibold">
-              {current.level === 'Yellow' ? 'Жовтий рівень' : 'Тривога'} · {typeLabel[current.alertType] ?? current.alertType}
+              {level === 'Yellow' ? 'Жовтий рівень' : level === 'Red' ? 'Червоний рівень' : 'Тривога'} · {typeLabel[current.alertType] ?? current.alertType}
               {current.placeId !== placeId && <span className="font-normal"> · {current.placeName}</span>}
             </div>
             <div>
               з {clock(current.startedAt)} · триває {duration(now.getTime() - new Date(current.startedAt).getTime())}
             </div>
-            {live.length > 1 && <div className="text-[11px] opacity-80">ще {live.length - 1} у районах області</div>}
+            {others.length > 0 && (
+              <div className="text-[11px] opacity-80">
+                також: {others.slice(0, 3).join(', ')}
+                {others.length > 3 && ` і ще ${others.length - 3}`}
+              </div>
+            )}
           </div>
         ) : (
           <div className="mb-2 rounded bg-emerald-50 px-2 py-1.5 text-emerald-900 dark:bg-emerald-900/30 dark:text-emerald-100">
@@ -153,7 +180,7 @@ export default function RegionPopup({ map, placeId, anchor, onClose }: Props) {
         {!history && !error && <div className="text-slate-500">Завантаження…</div>}
         {stats && (
           <div className="text-slate-600 dark:text-slate-300">
-            За добу: {stats.count} {stats.count === 1 ? 'тривога' : stats.count >= 2 && stats.count <= 4 ? 'тривоги' : 'тривог'} (разом із районними) · під тривогою {duration(stats.total)}
+            За добу: {stats.count} {stats.count === 1 ? 'тривога' : stats.count >= 2 && stats.count <= 4 ? 'тривоги' : 'тривог'} (разом з тими, що накривають, і районними) · під тривогою {duration(stats.total)}
           </div>
         )}
       </div>
