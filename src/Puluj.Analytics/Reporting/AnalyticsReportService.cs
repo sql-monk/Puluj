@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Puluj.Analytics.Analysis;
@@ -20,9 +21,10 @@ public sealed class AnalyticsReportService(IDbContextFactory<AnalyticsDbContext>
         await using var db = await factory.CreateDbContextAsync(ct);
         var latest = await RawMessageReader.MaxIdAsync(db, ct);
         var heartbeat = await HeartbeatAsync(db, ct);
+        var instance = await InstanceAsync(db, ct);
         if (!await InitializedAsync(db, ct))
         {
-            return new AnalyticsStatusDto(false, 0, latest, latest, heartbeat, null, [], 0, 0, 0, 0, []);
+            return new AnalyticsStatusDto(false, 0, latest, latest, heartbeat, null, [], 0, 0, 0, 0, [], instance);
         }
         var watermark = await AnalysisRunner.WatermarkAsync(db, ct);
         var runs = await db.Runs.AsNoTracking().OrderByDescending(r => r.StartedAt).Take(20).ToListAsync(ct);
@@ -36,7 +38,7 @@ public sealed class AnalyticsReportService(IDbContextFactory<AnalyticsDbContext>
         var migrations = await db.Database.SqlQueryRaw<string>("SELECT migration_id AS \"Value\" FROM analytics.\"__EFMigrationsHistory\" ORDER BY 1").ToListAsync(ct);
         var dtos = runs.Select(ToDto).ToList();
         return new AnalyticsStatusDto(true, watermark, latest, Math.Max(0, latest - watermark), heartbeat, dtos.FirstOrDefault(), dtos,
-            counts.Messages, counts.Fingerprinted, counts.Pairs, counts.SchemaBytes, migrations);
+            counts.Messages, counts.Fingerprinted, counts.Pairs, counts.SchemaBytes, migrations, instance);
     }
 
     public async Task<AnalyticsReportDto?> ReportAsync(int days, CancellationToken ct)
@@ -47,9 +49,7 @@ public sealed class AnalyticsReportService(IDbContextFactory<AnalyticsDbContext>
             return null;
         }
         days = Math.Clamp(days, 1, 90);
-        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(clock.GetUtcNow(), Kyiv).DateTime);
-        var sinceDay = today.AddDays(-(days - 1));
-        var since = TimeZoneInfo.ConvertTimeToUtc(sinceDay.ToDateTime(TimeOnly.MinValue, DateTimeKind.Unspecified), Kyiv);
+        var (sinceDay, since) = Period(days);
         var dayList = Enumerable.Range(0, days).Select(i => sinceDay.AddDays(i)).ToList();
 
         var sources = await db.Database.SqlQueryRaw<SourceRow>("SELECT source_id, code, name, enabled FROM sources ORDER BY priority DESC, source_id").ToListAsync(ct);
@@ -141,7 +141,7 @@ public sealed class AnalyticsReportService(IDbContextFactory<AnalyticsDbContext>
             firsts.Select(f => new TrackFirstDto(f.SourceId, f.CategoryCode, f.Firsts, f.Participations, f.LagCount == 0 ? null : Math.Round(f.LagSum / f.LagCount, 1))).ToList());
     }
 
-    public async Task<IReadOnlyList<RecentCopyDto>> RecentAsync(int limit, int? sourceId, CancellationToken ct)
+    public async Task<IReadOnlyList<RecentCopyDto>> RecentAsync(int limit, int? sourceId, CopyKind? kind, bool primaryOnly, CancellationToken ct)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
         if (!await InitializedAsync(db, ct))
@@ -149,14 +149,59 @@ public sealed class AnalyticsReportService(IDbContextFactory<AnalyticsDbContext>
             return [];
         }
         limit = Math.Clamp(limit, 1, 200);
-        // SqlQueryRaw turns the {0}/{1} placeholders into parameters.
-        var rows = sourceId is { } sid
-            ? await db.Database.SqlQueryRaw<RecentRow>(RecentSelect + " WHERE c.copy_source_id = {0} OR c.original_source_id = {0} ORDER BY c.found_at DESC, c.copy_published_at DESC LIMIT {1}", sid, limit).ToListAsync(ct)
-            : await db.Database.SqlQueryRaw<RecentRow>(RecentSelect + " ORDER BY c.found_at DESC, c.copy_published_at DESC LIMIT {0}", limit).ToListAsync(ct);
-        return rows.Select(r => new RecentCopyDto(r.CopierId, r.CopyRawMessageId, Utc(r.CopyPublishedAt), r.CopyText, r.CopyUrl,
-            r.OriginalId, r.OriginalRawMessageId, Utc(r.OriginalPublishedAt), r.OriginalText, r.OriginalUrl,
-            r.DelaySeconds, Math.Round(r.Jaccard, 3), Math.Round(r.Containment, 3), ((CopyKind)r.Kind).ToString().ToLowerInvariant(), r.IsPrimary)).ToList();
+        // SqlQueryRaw turns the {n} placeholders into parameters; the WHERE is assembled from the filters that are set.
+        var where = new List<string>();
+        var args = new List<object>();
+        if (sourceId is { } sid)
+        {
+            where.Add($"(c.copy_source_id = {{{args.Count}}} OR c.original_source_id = {{{args.Count}}})");
+            args.Add(sid);
+        }
+        if (kind is { } k)
+        {
+            where.Add($"c.kind = {{{args.Count}}}");
+            args.Add((int)k);
+        }
+        if (primaryOnly)
+        {
+            where.Add("c.is_primary");
+        }
+        var sql = RecentSelect + (where.Count == 0 ? "" : " WHERE " + string.Join(" AND ", where)) + $" ORDER BY c.found_at DESC, c.copy_published_at DESC LIMIT {{{args.Count}}}";
+        args.Add(limit);
+        var rows = await db.Database.SqlQueryRaw<RecentRow>(sql, args.ToArray()).ToListAsync(ct);
+        return rows.Select(ToDto).ToList();
     }
+
+    /// <summary>One copier → original pair over the period: aggregates, the delay histogram and the 20 latest examples (both texts). Null when the schema does not exist yet.</summary>
+    public async Task<PairDetailsDto?> PairAsync(int copierId, int originalId, int days, CancellationToken ct)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        if (!await InitializedAsync(db, ct))
+        {
+            return null;
+        }
+        days = Math.Clamp(days, 1, 90);
+        var (_, since) = Period(days);
+        var rows = await db.Database.SqlQuery<PairCopyRow>($"""
+            SELECT delay_seconds, kind, is_primary, jaccard::float AS jaccard
+            FROM analytics.copies WHERE copy_source_id = {copierId} AND original_source_id = {originalId} AND copy_published_at >= {since}
+            """).ToListAsync(ct);
+        var recent = await db.Database.SqlQueryRaw<RecentRow>(RecentSelect + " WHERE c.copy_source_id = {0} AND c.original_source_id = {1} AND c.copy_published_at >= {2} ORDER BY c.copy_published_at DESC LIMIT 20",
+            copierId, originalId, since).ToListAsync(ct);
+        return PairDelays.Summarize(copierId, originalId, days, rows, recent.Select(ToDto).ToList());
+    }
+
+    /// <summary>Kyiv calendar days: the period starts at local midnight `days - 1` days ago.</summary>
+    private (DateOnly SinceDay, DateTime SinceUtc) Period(int days)
+    {
+        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(clock.GetUtcNow(), Kyiv).DateTime);
+        var sinceDay = today.AddDays(-(days - 1));
+        return (sinceDay, TimeZoneInfo.ConvertTimeToUtc(sinceDay.ToDateTime(TimeOnly.MinValue, DateTimeKind.Unspecified), Kyiv));
+    }
+
+    private static RecentCopyDto ToDto(RecentRow r) => new(r.CopierId, r.CopyRawMessageId, Utc(r.CopyPublishedAt), r.CopyText, r.CopyUrl,
+        r.OriginalId, r.OriginalRawMessageId, Utc(r.OriginalPublishedAt), r.OriginalText, r.OriginalUrl,
+        r.DelaySeconds, Math.Round(r.Jaccard, 3), Math.Round(r.Containment, 3), ((CopyKind)r.Kind).ToString().ToLowerInvariant(), r.IsPrimary);
 
     private const string RecentSelect = """
         SELECT c.copy_source_id AS copier_id, c.copy_raw_message_id, c.copy_published_at, left(cm.raw_text, 300) AS copy_text, cm.url AS copy_url,
@@ -190,11 +235,35 @@ public sealed class AnalyticsReportService(IDbContextFactory<AnalyticsDbContext>
         return DateTimeOffset.TryParse(value, out var at) ? at : null;
     }
 
+    /// <summary>The status document the analytics process writes next to its heartbeat (docs/plan-admin-ops.md §2.1); null until it exists or when it does not parse.</summary>
+    private async Task<AnalyticsInstanceDto?> InstanceAsync(AnalyticsDbContext db, CancellationToken ct)
+    {
+        var key = $"Runtime:Worker:{options.Value.Name}:Status";
+        var value = (await db.Database.SqlQuery<string>($"SELECT value AS \"Value\" FROM app_settings WHERE key = {key}").ToListAsync(ct)).FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+        try
+        {
+            var doc = JsonSerializer.Deserialize<StatusDocument>(value, StatusJson);
+            return doc is null ? null : new AnalyticsInstanceDto(doc.Host, doc.Version, doc.BuiltAt, doc.StartedAt, doc.At, doc.Pid, doc.WorkingSetBytes, doc.CpuPercent, doc.Threads);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static readonly JsonSerializerOptions StatusJson = new(JsonSerializerDefaults.Web);
+
     private static DateTimeOffset Utc(DateTime dt) => new(DateTime.SpecifyKind(dt, DateTimeKind.Utc));
 
     private static RunDto ToDto(AnalysisRun r) => new(r.RunId, r.Instance, r.StartedAt, r.FinishedAt, r.UpdatedAt, r.Status.ToString().ToLowerInvariant(),
         r.WatermarkFrom, r.WatermarkTo, r.MessagesScanned, r.MessagesFingerprinted, r.PairsFound, r.Error);
 
+    /// <summary>The subset of Puluj.Contracts.WorkerStatusDto this library reads (it does not reference Contracts).</summary>
+    private sealed record StatusDocument(string? Host, string? Version, DateTimeOffset? BuiltAt, DateTimeOffset? StartedAt, DateTimeOffset? At, int? Pid, long? WorkingSetBytes, double? CpuPercent, int? Threads);
     private sealed record CountRow(long Messages, long Fingerprinted, long Pairs, long SchemaBytes);
     private sealed record SourceRow(int SourceId, string Code, string Name, bool Enabled);
     private sealed record PostDayRow(int SourceId, DateOnly Day, int Posts, int RowCount);

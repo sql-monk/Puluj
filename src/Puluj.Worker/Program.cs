@@ -36,6 +36,7 @@ if (roles.Contains(WorkerOptions.Migrate))
 if (!worker.MigrateOnly)
 {
     builder.Services.AddHostedService<WorkerHeartbeat>();
+    builder.Services.AddHostedService<WorkerStatusReporter>();
 }
 if (roles.Contains(WorkerOptions.Processing))
 {

@@ -3,6 +3,7 @@ using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using Puluj.Admin;
+using Puluj.Admin.Docker;
 using Puluj.Analytics;
 using Puluj.Api;
 using Puluj.Api.Services;
@@ -39,6 +40,9 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<ReferenceCache>())
 builder.Services.AddSingleton<DtoMapper>();
 builder.Services.AddSingleton<SnapshotService>();
 builder.Services.AddSingleton<LogReader>();
+// Container management through the docker CLI and the mounted socket; off unless Docker__Enabled (the compose stack sets it).
+builder.Services.AddOptions<DockerOptions>().Bind(builder.Configuration.GetSection(DockerOptions.Section));
+builder.Services.AddSingleton<DockerService>();
 builder.Services.AddHealthChecks()
     .AddNpgSql(sp => builder.Configuration.GetConnectionString(Puluj.Infrastructure.DependencyInjection.ConnectionStringName)!, name: "postgres", tags: ["db"]);
 

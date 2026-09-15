@@ -26,6 +26,8 @@ public class RawMessage
     public string? ClaimedBy { get; set; }
     /// <summary>When it was taken; an InProgress claim older than the lease is returned to Pending by any instance.</summary>
     public DateTimeOffset? ClaimedAt { get; set; }
+    /// <summary>Wall time of a successful processing (parse, lock wait, store) in ms; null for Skipped and Failed.</summary>
+    public int? ProcessingMs { get; set; }
 
     public ICollection<Target> Targets { get; set; } = [];
 }

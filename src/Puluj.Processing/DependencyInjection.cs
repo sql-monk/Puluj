@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using Puluj.Processing.Correlation;
 using Puluj.Processing.Indexes;
 using Puluj.Processing.Llm;
@@ -20,6 +21,7 @@ public static class DependencyInjection
         services.Configure<ProcessingOptions>(configuration.GetSection(ProcessingOptions.Section));
         services.AddSingleton(new ProcessorIdentity(instanceName ?? Environment.MachineName));
         services.AddSingleton<RawMessageClaims>();
+        services.AddSingleton<ProcessingStats>();
 
         services.AddSingleton<IndexProvider>();
         services.AddSingleton<IIndexes>(sp => sp.GetRequiredService<IndexProvider>());
@@ -27,6 +29,7 @@ public static class DependencyInjection
 
         services.AddSingleton<INormalizer, Normalizer>();
         services.Configure<LlmOptions>(configuration.GetSection(LlmOptions.Section));
+        services.AddSingleton(sp => new LlmBreaker(sp.GetRequiredService<IOptions<LlmOptions>>().Value.FailurePause));
         services.AddSingleton<RuleParser>();
         services.AddSingleton<IParser, LlmParser>(); // rules first, model only as a fallback
         services.AddSingleton<TargetBuilder>();

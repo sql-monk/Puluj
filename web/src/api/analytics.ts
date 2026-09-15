@@ -32,6 +32,20 @@ export interface AnalyticsStatusDto {
   pairsTotal: number
   schemaBytes: number
   migrations: string[]
+  /** What the analytics process writes about itself (`Runtime:Worker:analytics:Status`); absent until it does. */
+  instance?: AnalyticsInstanceDto | null
+}
+
+export interface AnalyticsInstanceDto {
+  host?: string | null
+  version?: string | null
+  builtAt?: string | null
+  startedAt?: string | null
+  at?: string | null
+  pid?: number | null
+  workingSetBytes?: number | null
+  cpuPercent?: number | null
+  threads?: number | null
 }
 
 export interface SourceDayDto {
@@ -53,11 +67,11 @@ export interface SourceAnalyticsDto {
   copies: number
   /** Times another source repeated one of this source's posts. */
   copiedBy: number
-  uniqueShare?: number
-  avgCopyDelaySeconds?: number
-  medianCopyDelaySeconds?: number
-  avgLeadSeconds?: number
-  verbatimShare?: number
+  uniqueShare?: number | null
+  avgCopyDelaySeconds?: number | null
+  medianCopyDelaySeconds?: number | null
+  avgLeadSeconds?: number | null
+  verbatimShare?: number | null
   forwardsInternal: number
   forwardsExternal: number
   /** Posts per hour of day (Kyiv), 0..23. */
@@ -91,7 +105,7 @@ export interface TrackFirstDto {
   categoryCode: string
   firsts: number
   participations: number
-  avgLagSeconds?: number
+  avgLagSeconds?: number | null
 }
 
 export interface AnalyticsReportDto {
@@ -120,9 +134,51 @@ export interface RecentCopyDto {
   isPrimary: boolean
 }
 
+export type CopyKind = RecentCopyDto['kind']
+
+/** One bar of the copy-delay histogram: [fromSeconds, toSeconds), the last one open-ended. */
+export interface DelayBucketDto {
+  fromSeconds: number
+  toSeconds?: number | null
+  count: number
+}
+
+/** One copier → original pair over the period: aggregates, delay distribution, the 20 latest examples. */
+export interface PairDetailsDto {
+  copierId: number
+  originalId: number
+  days: number
+  count: number
+  countAll: number
+  verbatim: number
+  forwards: number
+  avgDelaySeconds?: number | null
+  medianDelaySeconds?: number | null
+  minDelaySeconds?: number | null
+  avgJaccard?: number | null
+  delays: DelayBucketDto[]
+  recent: RecentCopyDto[]
+}
+
+export interface RecentFilter {
+  limit?: number
+  sourceId?: number
+  kind?: CopyKind
+  primaryOnly?: boolean
+}
+
+function query(params: Record<string, string | number | boolean | undefined>): string {
+  const q = Object.entries(params)
+    .filter(([, v]) => v !== undefined && v !== false && v !== '')
+    .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`)
+    .join('&')
+  return q ? `?${q}` : ''
+}
+
 export const analytics = {
   status: () => adminCall<AnalyticsStatusDto>('GET', '/api/admin/analytics/status'),
   report: (days = 14) => adminCall<AnalyticsReportDto>('GET', `/api/admin/analytics/report?days=${days}`),
-  recent: (limit = 30, sourceId?: number) => adminCall<RecentCopyDto[]>('GET', `/api/admin/analytics/recent?limit=${limit}${sourceId ? `&sourceId=${sourceId}` : ''}`),
+  recent: (f: RecentFilter = {}) => adminCall<RecentCopyDto[]>('GET', `/api/admin/analytics/recent${query({ limit: f.limit ?? 30, sourceId: f.sourceId, kind: f.kind, primaryOnly: f.primaryOnly })}`),
+  pair: (copierId: number, originalId: number, days = 14) => adminCall<PairDetailsDto>('GET', `/api/admin/analytics/pairs/${copierId}/${originalId}?days=${days}`),
   reset: () => adminCall<{ ok: boolean }>('POST', '/api/admin/analytics/reset', {}),
 }

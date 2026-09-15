@@ -1,5 +1,7 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
+using Puluj.Admin.Docker;
 using Puluj.Api.Services;
 using Puluj.Domain.Entities;
 using Puluj.Infrastructure.Ingestion;
@@ -10,23 +12,42 @@ using Puluj.Infrastructure.Settings;
 namespace Puluj.Admin;
 
 /// <summary>
-/// Operations view of the system for the admin panel: which service is alive, what each collector does,
-/// how the processing pipeline keeps up, what the database holds, and the tail of every service's log.
-/// Read-only over the database (statistics come from SQL, statuses from `app_settings` and the collector states).
+/// Operations view of the system for the admin panel: which service is alive, what every instance reports about
+/// itself, what each collector does, how the pipeline keeps up, the containers of the compose stack, what the database
+/// holds, and the tail of every service's log. Statistics come from SQL, statuses from `app_settings`, containers from
+/// the docker CLI (<see cref="DockerService"/>); the only writes are the container actions and the reprocess request.
 /// </summary>
 public static class OpsEndpoints
 {
     private static readonly TimeSpan WorkerStale = TimeSpan.FromSeconds(90);
     private static readonly TimeSpan WorkerForgotten = TimeSpan.FromMinutes(15); // a killed dev process leaves its key behind
 
+    /// <summary>The Worker writes its status document in camelCase (the web JSON options); enums as strings.</summary>
+    private static readonly JsonSerializerOptions StatusJson = new(JsonSerializerDefaults.Web) { Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) } };
+
     public static IEndpointRouteBuilder MapOpsEndpoints(this IEndpointRouteBuilder app)
     {
         var ops = app.MapGroup("/api/admin").AddEndpointFilter(AdminEndpoints.AuthorizeAsync);
 
         ops.MapGet("/ops/overview", OverviewAsync);
+        ops.MapGet("/ops/workers", WorkersAsync);
         ops.MapGet("/ops/collectors", CollectorsAsync);
-        ops.MapGet("/ops/processing", ProcessingAsync);
+        ops.MapGet("/ops/pipeline", PipelineAsync);
         ops.MapGet("/ops/db", DbAsync);
+
+        // Containers of the compose stack (docs/plan-admin-ops.md §2.3): list, restart / stop / start, scale the processors.
+        ops.MapGet("/ops/containers", async (DockerService docker, CancellationToken ct) => Results.Ok(await docker.ListAsync(ct)));
+        ops.MapPost("/ops/containers/{id}/{action:regex(^(restart|stop|start)$)}", async (string id, string action, HttpContext http, DockerService docker, CancellationToken ct) =>
+        {
+            var outcome = await docker.ActAsync(id, action, http.Connection.RemoteIpAddress?.ToString(), ct);
+            return Results.Json(outcome.Result, statusCode: outcome.StatusCode);
+        });
+        ops.MapPost("/ops/processors/scale", async (ScaleRequest req, HttpContext http, DockerService docker, CancellationToken ct) =>
+        {
+            var outcome = await docker.ScaleAsync(req.Replicas, http.Connection.RemoteIpAddress?.ToString(), ct);
+            var containers = outcome.StatusCode is 200 or 502 ? await docker.ListAsync(ct, fresh: true) : null;
+            return Results.Json(new { result = outcome.Result, containers }, statusCode: outcome.StatusCode);
+        });
 
         // Earned rating of the sources (originality, who copies whom, groups) with per-day history.
         ops.MapGet("/sources/rating", async (int? days, SnapshotService snapshots, CancellationToken ct) =>
@@ -99,9 +120,14 @@ public static class OpsEndpoints
         {
             services.Add(new ServiceStatusDto("worker", "unknown", "heartbeat ще не записано", null));
         }
+        var processors = 0;
         foreach (var (name, heartbeat) in workers)
         {
             var alive = now - heartbeat < WorkerStale;
+            if (alive && DockerContainers.KindOf(name) == "processor")
+            {
+                processors++;
+            }
             services.Add(new ServiceStatusDto($"worker:{name}", alive ? "ok" : "down",
                 alive ? "heartbeat свіжий" : $"heartbeat застарів на {(int)(now - heartbeat).TotalMinutes} хв", heartbeat));
         }
@@ -141,7 +167,7 @@ public static class OpsEndpoints
         services.Add(new ServiceStatusDto("postgres", "ok", version.Split(' ', 3) is { Length: >= 2 } v ? $"{v[0]} {v[1]}" : version, now));
         services.Add(new ServiceStatusDto("admin", "ok", "ця панель", now));
 
-        return Results.Ok(new OpsOverviewDto(now, services, new DbOverviewDto(version, size, connections, migrations.LastOrDefault(), migrations.Count)));
+        return Results.Ok(new OpsOverviewDto(now, services, new DbOverviewDto(version, size, connections, migrations.LastOrDefault(), migrations.Count), processors));
     }
 
     /// <summary>
@@ -167,6 +193,80 @@ public static class OpsEndpoints
             }
         }
         return result.OrderBy(w => w.Item2).ToList();
+    }
+
+    /// <summary>The instance's own status document (`Runtime:Worker:{name}:Status`, §2.1); null when absent or unreadable.</summary>
+    public static WorkerStatusDto? WorkerStatus(IReadOnlyDictionary<string, AppSetting> all, string name)
+    {
+        var key = $"Runtime:Worker:{name}:Status";
+        var value = all.TryGetValue(key, out var exact) ? exact.Value
+            : all.FirstOrDefault(kv => kv.Key.Equals(key, StringComparison.OrdinalIgnoreCase)).Value?.Value;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+        try
+        {
+            return JsonSerializer.Deserialize<WorkerStatusDto>(value, StatusJson);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private sealed record ClaimRow(string ClaimedBy, long ProcessedDay, long InProgress);
+
+    /// <summary>Every instance with a heartbeat: its status document, its share of the work (by claimed_by) and its container.</summary>
+    private static async Task<IResult> WorkersAsync(SettingsStore settings, IDbContextFactory<PulujDbContext> factory, DockerService docker, TimeProvider clock, CancellationToken ct)
+    {
+        var now = clock.GetUtcNow();
+        var all = await settings.GetAllAsync(ct);
+        var heartbeats = WorkerHeartbeats(all, now);
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var claims = (await db.Database.SqlQueryRaw<ClaimRow>("""
+            SELECT claimed_by AS claimed_by,
+                   count(*) FILTER (WHERE processed_at >= now() - interval '24 hours' AND processing_status = 1) AS processed_day,
+                   count(*) FILTER (WHERE processing_status = 4) AS in_progress
+            FROM raw_messages
+            WHERE claimed_by IS NOT NULL AND (processed_at >= now() - interval '24 hours' OR processing_status = 4)
+            GROUP BY 1
+            """).ToListAsync(ct)).ToDictionary(c => c.ClaimedBy, StringComparer.OrdinalIgnoreCase);
+        var containers = docker.Enabled ? (await docker.ListAsync(ct)).Containers : [];
+
+        var list = heartbeats.Select(h =>
+        {
+            var kind = DockerContainers.KindOf(h.Name);
+            var claim = claims.GetValueOrDefault(h.Name);
+            var container = DockerContainers.Match(h.Name, kind, containers);
+            return new WorkerInstanceDto(h.Name, kind, now - h.At < WorkerStale, h.At, WorkerStatus(all, h.Name),
+                claim?.ProcessedDay ?? 0, claim?.InProgress ?? 0,
+                container?.Id, container?.Name, container?.State, container?.CpuPercent, container?.MemoryBytes);
+        })
+        .OrderBy(w => KindOrder(w.Kind)).ThenBy(w => w.Name, StringComparer.Ordinal)
+        .ToList();
+        return Results.Ok(list);
+    }
+
+    private static int KindOrder(string kind) => kind switch
+    {
+        "processor" => 0,
+        "collector-telegram" => 1,
+        "collector-alerts" => 2,
+        "analytics" => 3,
+        "worker" => 4,
+        _ => 5,
+    };
+
+    private static async Task<IResult> PipelineAsync(int? hours, IDbContextFactory<PulujDbContext> factory, TimeProvider clock, CancellationToken ct)
+    {
+        var h = hours ?? 24;
+        if (!PipelineBuckets.AllowedHours.Contains(h))
+        {
+            return Results.BadRequest(new { error = $"hours має бути одним із: {string.Join(", ", PipelineBuckets.AllowedHours)}" });
+        }
+        await using var db = await factory.CreateDbContextAsync(ct);
+        return Results.Ok(await PipelineReport.BuildAsync(db, h, clock.GetUtcNow(), ct));
     }
 
     private sealed record HourCount(int SourceId, DateTime Hour, int Count);
@@ -203,42 +303,6 @@ public static class OpsEndpoints
                 perHour.Sum(), perHour);
         }).ToList();
         return Results.Ok(list);
-    }
-
-    private sealed record HourRow(DateTime Hour, int Received, int Processed, int Targets, int Links, int Errors);
-    private sealed record StatusCount(int Status, long Count);
-    private sealed record StageCount(string Stage, long Count);
-
-    private static async Task<IResult> ProcessingAsync(IDbContextFactory<PulujDbContext> factory, CancellationToken ct)
-    {
-        await using var db = await factory.CreateDbContextAsync(ct);
-        var hours = await db.Database.SqlQueryRaw<HourRow>("""
-            WITH h AS (
-                SELECT generate_series(date_trunc('hour', now()) - interval '23 hours', date_trunc('hour', now()), interval '1 hour') AS hour)
-            SELECT h.hour::timestamp AS hour,
-                   (SELECT count(*)::int FROM raw_messages r WHERE r.received_at >= h.hour AND r.received_at < h.hour + interval '1 hour') AS received,
-                   (SELECT count(*)::int FROM raw_messages r WHERE r.processed_at >= h.hour AND r.processed_at < h.hour + interval '1 hour') AS processed,
-                   (SELECT count(*)::int FROM targets t WHERE t.observed_at >= h.hour AND t.observed_at < h.hour + interval '1 hour') AS targets,
-                   (SELECT count(*)::int FROM target_links l WHERE l.created_at >= h.hour AND l.created_at < h.hour + interval '1 hour') AS links,
-                   (SELECT count(*)::int FROM processing_errors e WHERE e.occurred_at >= h.hour AND e.occurred_at < h.hour + interval '1 hour') AS errors
-            FROM h ORDER BY h.hour
-            """).ToListAsync(ct);
-        var queue = await db.Database.SqlQueryRaw<StatusCount>("SELECT processing_status AS status, count(*) AS count FROM raw_messages GROUP BY 1").ToListAsync(ct);
-        var stages = await db.Database.SqlQueryRaw<StageCount>("SELECT stage, count(*) AS count FROM processing_errors WHERE occurred_at >= now() - interval '24 hours' GROUP BY 1").ToListAsync(ct);
-        var errors = await db.ProcessingErrors.AsNoTracking().OrderByDescending(e => e.OccurredAt).Take(50)
-            .Select(e => new ProcessingErrorDto(e.ProcessingErrorId, e.OccurredAt, e.Stage, e.Message, e.SourceId, e.RawMessageId, e.Exception))
-            .ToListAsync(ct);
-        var since = DateTimeOffset.UtcNow.AddHours(-24);
-        var targets24 = await db.Targets.LongCountAsync(t => t.ObservedAt >= since, ct);
-        var duplicates24 = await db.Targets.LongCountAsync(t => t.ObservedAt >= since && t.DuplicateOfTargetId != null, ct);
-        var links24 = await db.TargetLinks.LongCountAsync(l => l.CreatedAt >= since, ct);
-
-        return Results.Ok(new ProcessingReportDto(
-            queue.ToDictionary(q => ((Puluj.Domain.Enums.ProcessingStatus)q.Status).ToString(), q => q.Count),
-            hours.Select(h => new HourlyProcessingDto(new DateTimeOffset(DateTime.SpecifyKind(h.Hour, DateTimeKind.Utc)), h.Received, h.Processed, h.Targets, h.Links, h.Errors)).ToList(),
-            errors,
-            stages.ToDictionary(s => s.Stage, s => s.Count),
-            targets24, links24, duplicates24));
     }
 
     private sealed record TableRow(string Name, long Rows, long Bytes);

@@ -5,21 +5,31 @@ namespace Puluj.Api;
 public static class StatsEndpoints
 {
     /// <summary>
-    /// Statistics page: every chart of one period in a single payload. `from`/`to` optional (default: the last 24 h);
-    /// the end is clamped to now, the span to StatsAggregator.MaxDays. Aggregates only — nothing about the viewer.
+    /// Statistics page, one payload per tab: `/stats/targets`, `/stats/alerts`, `/stats/sources`, `/stats/recognition`.
+    /// `from`/`to` optional (default: the last 24 h); the end is clamped to now, the span to StatsBuckets.MaxDays.
+    /// Aggregates only — nothing about the viewer — so the answers are cached per section and period.
     /// </summary>
     public static IEndpointRouteBuilder MapStatsEndpoints(this IEndpointRouteBuilder api)
     {
-        api.MapGet("/stats", async (DateTimeOffset? from, DateTimeOffset? to, StatsService stats, HttpContext http, CancellationToken ct) =>
-        {
-            if (from is { } f && to is { } t && t <= f)
-            {
-                return Results.ValidationProblem(new Dictionary<string, string[]> { ["to"] = ["`to` must be after `from`."] });
-            }
-            var dto = await stats.GetAsync(from, to, ct);
-            http.Response.Headers.CacheControl = "public, max-age=60";
-            return Results.Ok(dto);
-        });
+        api.MapGet("/stats/targets", (DateTimeOffset? from, DateTimeOffset? to, StatsService stats, HttpContext http, CancellationToken ct) =>
+            SectionAsync(from, to, http, ct2 => stats.TargetsAsync(from, to, ct2), ct));
+        api.MapGet("/stats/alerts", (DateTimeOffset? from, DateTimeOffset? to, StatsService stats, HttpContext http, CancellationToken ct) =>
+            SectionAsync(from, to, http, ct2 => stats.AlertsAsync(from, to, ct2), ct));
+        api.MapGet("/stats/sources", (DateTimeOffset? from, DateTimeOffset? to, StatsService stats, HttpContext http, CancellationToken ct) =>
+            SectionAsync(from, to, http, ct2 => stats.SourcesAsync(from, to, ct2), ct));
+        api.MapGet("/stats/recognition", (DateTimeOffset? from, DateTimeOffset? to, StatsService stats, HttpContext http, CancellationToken ct) =>
+            SectionAsync(from, to, http, ct2 => stats.RecognitionAsync(from, to, ct2), ct));
         return api;
+    }
+
+    private static async Task<IResult> SectionAsync<T>(DateTimeOffset? from, DateTimeOffset? to, HttpContext http, Func<CancellationToken, Task<T>> load, CancellationToken ct)
+    {
+        if (from is { } f && to is { } t && t <= f)
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]> { ["to"] = ["`to` must be after `from`."] });
+        }
+        var dto = await load(ct);
+        http.Response.Headers.CacheControl = "public, max-age=60";
+        return Results.Ok(dto);
     }
 }

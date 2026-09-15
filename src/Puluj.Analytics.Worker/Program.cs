@@ -4,6 +4,7 @@ using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using Puluj.Analytics;
+using Puluj.Analytics.Persistence;
 using Puluj.Analytics.Reporting;
 using Puluj.Analytics.Worker;
 using Serilog;
@@ -55,7 +56,20 @@ app.MapGet("/health", (AnalysisLoop loop) =>
 app.MapGet("/api/analytics/status", (AnalyticsReportService reports, CancellationToken ct) => reports.StatusAsync(ct));
 app.MapGet("/api/analytics/report", async (int? days, AnalyticsReportService reports, CancellationToken ct) =>
     await reports.ReportAsync(days ?? 14, ct) is { } report ? Results.Ok(report) : Results.NotFound(new { error = "analytics schema is not initialized" }));
-app.MapGet("/api/analytics/recent", (int? limit, int? sourceId, AnalyticsReportService reports, CancellationToken ct) => reports.RecentAsync(limit ?? 30, sourceId, ct));
+// kind: near | verbatim | forward; primaryOnly: only the earliest original of every copy (same contract as the admin panel).
+app.MapGet("/api/analytics/recent", async (int? limit, int? sourceId, string? kind, bool? primaryOnly, AnalyticsReportService reports, CancellationToken ct) =>
+{
+    CopyKind? copyKind = null;
+    if (!string.IsNullOrEmpty(kind))
+    {
+        if (!Enum.TryParse<CopyKind>(kind, ignoreCase: true, out var parsed) || !Enum.IsDefined(parsed))
+        {
+            return Results.BadRequest(new { error = "kind: near, verbatim or forward" });
+        }
+        copyKind = parsed;
+    }
+    return Results.Ok(await reports.RecentAsync(limit ?? 30, sourceId, copyKind, primaryOnly ?? false, ct));
+});
 
 app.Services.GetRequiredService<ILogger<Program>>().LogInformation("{App} starting", appName);
 await app.RunAsync();

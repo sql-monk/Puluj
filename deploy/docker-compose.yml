@@ -120,6 +120,14 @@ services:
 
   # Admin panel: settings, status, statistics and logs of every service; read-write role, own port. Keep it off the
   # public internet (or set Admin__Token).
+  #
+  # Container management (panel → "Воркери"): the host's Docker socket is mounted, and the image carries the docker CLI
+  # with the compose plugin, so the panel can restart / stop containers of this project and scale `processor`
+  # (`docker compose up --scale`, run against the same compose files through the read-only /deploy mount). Security:
+  # whoever controls the socket controls the host (root-equivalent) — the panel only ever touches containers labelled
+  # with this compose project and refuses admin / postgis / migrate, but the socket itself has no such limit, so the
+  # admin port must stay private (firewall / VPN) and Admin__Token set. Drop the socket line and Docker__Enabled to
+  # run the panel without any of this.
   admin:
     build:
       context: ..
@@ -130,11 +138,16 @@ services:
       Admin__ApiUrl: http://api:8080
       Admin__Token: ${ADMIN_TOKEN:-}
       Logs__Directory: /app/logs
+      Docker__Enabled: "true"
+      Docker__ComposeDir: /deploy
+      Docker__Project: puluj
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
     ports:
       - "8081:8081"
     volumes:
       - logs:/app/logs
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./:/deploy:ro  # compose files + .env (+ docker-compose.override.yml) for `docker compose ... --scale`
     depends_on:
       postgis:
         condition: service_healthy

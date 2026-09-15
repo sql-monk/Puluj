@@ -14,6 +14,7 @@ public class RawMessageConfiguration : IEntityTypeConfiguration<RawMessage>
         b.Property(x => x.Url).HasMaxLength(2048);
         b.Property(x => x.RawPayload).HasColumnType("jsonb");
         b.Property(x => x.ClaimedBy).HasMaxLength(64);
+        b.Property(x => x.ProcessingMs); // aggregated with percentile_cont over received_at/claimed_by ranges: no index of its own
 
         // Idempotency keys (spec §5)
         b.HasIndex(x => new { x.SourceId, x.SourceMessageId }).IsUnique();

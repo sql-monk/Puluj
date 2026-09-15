@@ -39,11 +39,11 @@ public sealed class LlmParser : IParser
     private string? _clientKey;
     private bool _warnedNoKey;
 
-    public LlmParser(RuleParser rules, IIndexes indexes, INormalizer normalizer, IOptionsMonitor<LlmOptions> options, PulujMetrics metrics, TimeProvider clock, ILogger<LlmParser> logger)
+    public LlmParser(RuleParser rules, IIndexes indexes, INormalizer normalizer, IOptionsMonitor<LlmOptions> options, LlmBreaker breaker, PulujMetrics metrics, TimeProvider clock, ILogger<LlmParser> logger)
     {
         _rules = rules;
         _clock = clock;
-        _breaker = new LlmBreaker(options.CurrentValue.FailurePause);
+        _breaker = breaker;
         _indexes = indexes;
         _normalizer = normalizer;
         _monitor = options;
@@ -120,6 +120,7 @@ public sealed class LlmParser : IParser
             _metrics.LlmCall("rate_limited");
             return facts;
         }
+        _breaker.Attempt();
         try
         {
             var result = await AskAsync(message.Text, ct);
@@ -149,6 +150,7 @@ public sealed class LlmParser : IParser
         catch (Exception ex) when (ex is TimeoutException or OperationCanceledException or JsonException)
         {
             _metrics.LlmCall("error");
+            _breaker.Fail();
             _logger.LogWarning(ex, "LLM fallback failed");
         }
         return facts;

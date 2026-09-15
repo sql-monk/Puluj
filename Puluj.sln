@@ -31,6 +31,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Puluj.Analytics.Worker", "s
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Puluj.Analytics.Tests", "tests\Puluj.Analytics.Tests\Puluj.Analytics.Tests.csproj", "{0FD41D0F-94C6-4CBC-AB21-78402B9B787D}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Puluj.Admin.Tests", "tests\Puluj.Admin.Tests\Puluj.Admin.Tests.csproj", "{AE174C52-F06D-4C81-A5FF-815998D4B93E}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -185,6 +187,18 @@ Global
 		{0FD41D0F-94C6-4CBC-AB21-78402B9B787D}.Release|x64.Build.0 = Release|Any CPU
 		{0FD41D0F-94C6-4CBC-AB21-78402B9B787D}.Release|x86.ActiveCfg = Release|Any CPU
 		{0FD41D0F-94C6-4CBC-AB21-78402B9B787D}.Release|x86.Build.0 = Release|Any CPU
+		{AE174C52-F06D-4C81-A5FF-815998D4B93E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AE174C52-F06D-4C81-A5FF-815998D4B93E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AE174C52-F06D-4C81-A5FF-815998D4B93E}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{AE174C52-F06D-4C81-A5FF-815998D4B93E}.Debug|x64.Build.0 = Debug|Any CPU
+		{AE174C52-F06D-4C81-A5FF-815998D4B93E}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{AE174C52-F06D-4C81-A5FF-815998D4B93E}.Debug|x86.Build.0 = Debug|Any CPU
+		{AE174C52-F06D-4C81-A5FF-815998D4B93E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AE174C52-F06D-4C81-A5FF-815998D4B93E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AE174C52-F06D-4C81-A5FF-815998D4B93E}.Release|x64.ActiveCfg = Release|Any CPU
+		{AE174C52-F06D-4C81-A5FF-815998D4B93E}.Release|x64.Build.0 = Release|Any CPU
+		{AE174C52-F06D-4C81-A5FF-815998D4B93E}.Release|x86.ActiveCfg = Release|Any CPU
+		{AE174C52-F06D-4C81-A5FF-815998D4B93E}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -202,5 +216,6 @@ Global
 		{5FF034A1-88F0-4A33-9BAF-7B26D8CD1835} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{EF0C9B59-ABE2-4B58-A379-70827DEEF855} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{0FD41D0F-94C6-4CBC-AB21-78402B9B787D} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{AE174C52-F06D-4C81-A5FF-815998D4B93E} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal

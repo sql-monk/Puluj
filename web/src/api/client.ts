@@ -1,5 +1,5 @@
 import type { Geometry } from 'geojson'
-import type { AlertDto, MapConfigDto, TargetDto, PlaceDto, PredecessorsDto, RegionDto, ReplayDto, SnapshotDto, SourceDto, StatsDto, TimelineBucketDto, TrackDetailsDto } from './types'
+import type { AlertDto, MapConfigDto, TargetDto, PlaceDto, PredecessorsDto, RegionDto, ReplayDto, SnapshotDto, SourceDto, StatsAlertsDto, StatsRecognitionDto, StatsSourcesDto, StatsTargetsDto, TimelineBucketDto, TrackDetailsDto } from './types'
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(path, { headers: { Accept: 'application/json' } })
@@ -7,6 +7,10 @@ async function get<T>(path: string): Promise<T> {
     throw new Error(`${path}: HTTP ${res.status}`)
   }
   return (await res.json()) as T
+}
+
+function periodQuery(from: Date, to: Date): string {
+  return `from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`
 }
 
 export const api = {
@@ -33,8 +37,13 @@ export const api = {
   searchPlaces: (q: string) => get<PlaceDto[]>(`/api/places/search?q=${encodeURIComponent(q)}&limit=8`),
   /** Every track of a replay window with all its reported positions (one payload for the whole timelapse). */
   replay: (from: Date, to: Date) => get<ReplayDto>(`/api/replay?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`),
-  /** Every chart of the statistics page for one period (server-cached, the same for everyone). */
-  stats: (from: Date, to: Date) => get<StatsDto>(`/api/stats?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`),
+  /** The statistics page, one payload per tab for one period (server-cached, the same for everyone). */
+  stats: {
+    targets: (from: Date, to: Date) => get<StatsTargetsDto>(`/api/stats/targets?${periodQuery(from, to)}`),
+    alerts: (from: Date, to: Date) => get<StatsAlertsDto>(`/api/stats/alerts?${periodQuery(from, to)}`),
+    sources: (from: Date, to: Date) => get<StatsSourcesDto>(`/api/stats/sources?${periodQuery(from, to)}`),
+    recognition: (from: Date, to: Date) => get<StatsRecognitionDto>(`/api/stats/recognition?${periodQuery(from, to)}`),
+  },
   timeline: (from: Date, to: Date, bucketMinutes: number) =>
     get<TimelineBucketDto[]>(
       `/api/timeline?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}&bucketMinutes=${bucketMinutes}`,

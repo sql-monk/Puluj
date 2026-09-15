@@ -13,6 +13,19 @@ RUN dotnet restore src/Puluj.Admin/Puluj.Admin.csproj
 RUN dotnet publish src/Puluj.Admin/Puluj.Admin.csproj -c Release -o /app --no-restore
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
+# Docker CLI + compose plugin (no daemon): the panel restarts containers and scales the processors through the host's
+# socket mounted by docker-compose.yml (Docker__Enabled). Debian release taken from the base image, so a bump of the
+# aspnet tag keeps the right apt repository.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+    && install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
+    && chmod a+r /etc/apt/keyrings/docker.asc \
+    && . /etc/os-release \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian ${VERSION_CODENAME} stable" > /etc/apt/sources.list.d/docker.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends docker-ce-cli docker-compose-plugin \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /app .
 COPY --from=web /src/Puluj.Admin/wwwroot ./wwwroot

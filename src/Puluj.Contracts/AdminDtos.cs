@@ -30,7 +30,8 @@ public sealed record ServiceStatusDto(string Name, string Status, string? Detail
 
 public sealed record DbOverviewDto(string Version, long SizeBytes, int Connections, string? LastMigration, int MigrationCount);
 
-public sealed record OpsOverviewDto(DateTimeOffset GeneratedAt, IReadOnlyList<ServiceStatusDto> Services, DbOverviewDto Db);
+/// <param name="ProcessorCount">Message processor instances with a fresh heartbeat (replicas of the `processor` service).</param>
+public sealed record OpsOverviewDto(DateTimeOffset GeneratedAt, IReadOnlyList<ServiceStatusDto> Services, DbOverviewDto Db, int ProcessorCount);
 
 /// <param name="PerHour">Messages received per hour for the last 24 hours, oldest first.</param>
 public sealed record CollectorStatusDto(
@@ -38,14 +39,7 @@ public sealed record CollectorStatusDto(
     DateTimeOffset? LastPolledAt, DateTimeOffset? LastSuccessAt, DateTimeOffset? LastMessageAt, string? LastError, int ConsecutiveFailures,
     long Messages24h, IReadOnlyList<int> PerHour);
 
-public sealed record HourlyProcessingDto(DateTimeOffset Hour, int Received, int Processed, int Targets, int Links, int Errors);
-
 public sealed record ProcessingErrorDto(long Id, DateTimeOffset OccurredAt, string Stage, string Message, int? SourceId, long? RawMessageId, string? Exception);
-
-/// <param name="Queue">Raw messages by processing status.</param>
-public sealed record ProcessingReportDto(
-    Dictionary<string, long> Queue, IReadOnlyList<HourlyProcessingDto> Hours, IReadOnlyList<ProcessingErrorDto> RecentErrors,
-    Dictionary<string, long> ErrorsByStage24h, long Targets24h, long Links24h, long Duplicates24h);
 
 public sealed record DbTableDto(string Name, long Rows, long Bytes);
 

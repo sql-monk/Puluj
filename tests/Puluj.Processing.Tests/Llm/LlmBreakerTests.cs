@@ -33,6 +33,25 @@ public class LlmBreakerTests
     }
 
     [Fact]
+    public void Counts_calls_and_failures_and_exposes_the_pause()
+    {
+        var breaker = new LlmBreaker(TimeSpan.FromMinutes(15));
+        Assert.Null(breaker.PausedUntil);
+        breaker.Attempt();
+        breaker.Attempt();
+        breaker.Fail(); // a timeout: counted, no pause
+        Assert.Null(breaker.Trip(HttpStatusCode.InternalServerError, "overloaded", T0));
+        breaker.Trip(HttpStatusCode.Unauthorized, "authentication_error", T0);
+        Assert.Equal(2, breaker.Calls);
+        Assert.Equal(3, breaker.Failures);
+        Assert.Equal(T0.AddMinutes(15), breaker.PausedUntil);
+        Assert.Equal("authentication_error", breaker.PauseReason);
+        breaker.Reset();
+        Assert.Null(breaker.PausedUntil);
+        Assert.Equal(3, breaker.Failures); // counters are for the process lifetime
+    }
+
+    [Fact]
     public void Success_clears_the_pause_and_its_reason()
     {
         var breaker = new LlmBreaker(TimeSpan.FromMinutes(15));

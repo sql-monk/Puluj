@@ -346,6 +346,10 @@ namespace Puluj.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("processed_at");
 
+                    b.Property<int?>("ProcessingMs")
+                        .HasColumnType("integer")
+                        .HasColumnName("processing_ms");
+
                     b.Property<int>("ProcessingStatus")
                         .HasColumnType("integer")
                         .HasColumnName("processing_status");

@@ -72,6 +72,8 @@ export interface OpsOverviewDto {
   generatedAt: string
   services: ServiceStatusDto[]
   db: { version: string; sizeBytes: number; connections: number; lastMigration?: string; migrationCount: number }
+  /** Message processor instances with a fresh heartbeat. */
+  processorCount: number
 }
 export interface CollectorStatusDto {
   sourceId: number
@@ -88,14 +90,6 @@ export interface CollectorStatusDto {
   /** Messages received per hour for the last 24 hours, oldest first. */
   perHour: number[]
 }
-export interface HourlyProcessingDto {
-  hour: string
-  received: number
-  processed: number
-  targets: number
-  links: number
-  errors: number
-}
 export interface ProcessingErrorDto {
   id: number
   occurredAt: string
@@ -105,14 +99,171 @@ export interface ProcessingErrorDto {
   rawMessageId?: number
   exception?: string
 }
-export interface ProcessingReportDto {
+
+// ---- Instances, containers, pipeline (docs/plan-admin-ops.md §2.1, §2.4) ----
+
+export interface StageTimingDto {
+  samples: number
+  meanMs: number
+  p50Ms: number
+  p90Ms: number
+  maxMs: number
+}
+export interface ClaimDto {
+  rawMessageId: number
+  since: string
+}
+export interface ProcessingStatusDto {
+  concurrency: number
+  processed: number
+  skipped: number
+  failed: number
+  retried: number
+  retriedTransient: number
+  perMinute1: number
+  perMinute5: number
+  parse: StageTimingDto
+  lock: StageTimingDto
+  store: StageTimingDto
+  total: StageTimingDto
+  lastProcessedAt?: string
+  lastRawMessageId?: number
+  claims: ClaimDto[]
+}
+export interface LlmStatusDto {
+  enabled: boolean
+  model: string
+  pausedUntil?: string
+  pauseReason?: string
+  calls: number
+  failures: number
+}
+/** What an instance writes about itself every 10 s (`Runtime:Worker:{name}:Status`). */
+export interface WorkerStatusDto {
+  instance: string
+  host: string
+  roles: string[]
+  version: string
+  builtAt: string
+  startedAt: string
+  at: string
+  pid: number
+  workingSetBytes: number
+  cpuPercent: number
+  threads: number
+  processing?: ProcessingStatusDto
+  llm?: LlmStatusDto
+  paused?: string
+}
+export interface WorkerInstanceDto {
+  name: string
+  kind: 'processor' | 'collector-telegram' | 'collector-alerts' | 'analytics' | 'worker' | 'migrate' | 'other'
+  alive: boolean
+  heartbeatAt?: string
+  status?: WorkerStatusDto
+  processed24h: number
+  inProgress: number
+  containerId?: string
+  containerName?: string
+  containerState?: string
+  cpuPercent?: number
+  memoryBytes?: number
+}
+export interface ContainerDto {
+  id: string
+  name: string
+  service: string
+  image: string
+  state: 'running' | 'exited' | 'restarting' | 'paused' | 'created' | 'dead' | string
+  status: string
+  startedAt?: string
+  cpuPercent?: number
+  memoryBytes?: number
+  memoryLimitBytes?: number
+  /** False for admin / postgis / migrate: view only. */
+  controllable: boolean
+  replicaNumber?: number
+}
+export interface ContainersDto {
+  available: boolean
+  unavailable?: string
+  project: string
+  containers: ContainerDto[]
+  processorReplicas: number
+}
+export interface ContainerActionResultDto {
+  ok: boolean
+  message: string
+  output: string
+}
+export interface ScaleResultDto {
+  result: ContainerActionResultDto
+  containers?: ContainersDto
+}
+export interface PipelineTotalsDto {
+  received: number
+  processed: number
+  skipped: number
+  failed: number
+  pending: number
+  inProgress: number
+  targets: number
+  duplicates: number
+  tracks: number
+  errors: number
+  p50Ms?: number
+  p90Ms?: number
+  meanMs?: number
+}
+export interface PipelineSourceDto {
+  sourceId: number
+  code: string
+  name: string
+  type: string
+  enabled: boolean
+  received: number
+  processed: number
+  skipped: number
+  failed: number
+  pending: number
+  withTargets: number
+  targets: number
+  tracks: number
+  medianLagSeconds?: number
+  p50Ms?: number
+  p90Ms?: number
+  /** Received per bucket, aligned with PipelineReportDto.bucketStarts. */
+  series: number[]
+}
+export interface PipelineBucketDto {
+  at: string
+  received: number
+  processed: number
+  targets: number
+  errors: number
+  transient: number
+  p50Ms?: number
+  p90Ms?: number
+}
+export interface PipelineInstanceDto {
+  instance: string
+  processed: number
+  p50Ms?: number
+  p90Ms?: number
+  lastAt?: string
+}
+export interface PipelineReportDto {
+  from: string
+  to: string
+  bucket: 'hour' | 'day'
+  bucketStarts: string[]
+  totals: PipelineTotalsDto
+  sources: PipelineSourceDto[]
+  timeline: PipelineBucketDto[]
+  instances: PipelineInstanceDto[]
   queue: Record<string, number>
-  hours: HourlyProcessingDto[]
+  errorsByStage: Record<string, number>
   recentErrors: ProcessingErrorDto[]
-  errorsByStage24h: Record<string, number>
-  targets24h: number
-  links24h: number
-  duplicates24h: number
 }
 export interface DbReportDto {
   version: string
@@ -155,9 +306,12 @@ export function setAdminToken(token: string) {
 
 export class AdminError extends Error {
   status: number
-  constructor(status: number, message: string) {
+  /** The parsed JSON body of the failed response, when there was one (container actions answer with their result). */
+  body?: unknown
+  constructor(status: number, message: string, body?: unknown) {
     super(message)
     this.status = status
+    this.body = body
   }
 }
 
@@ -174,13 +328,15 @@ async function call<T>(method: string, path: string, body?: unknown, extraHeader
   const res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) })
   if (!res.ok) {
     let msg = `HTTP ${res.status}`
+    let body: unknown
     try {
-      const j = (await res.json()) as { error?: string; title?: string }
-      msg = j.error ?? j.title ?? msg
+      const j = (await res.json()) as { error?: string; title?: string; message?: string; result?: { message?: string } }
+      body = j
+      msg = j.error ?? j.title ?? j.message ?? j.result?.message ?? msg
     } catch {
       /* no body */
     }
-    throw new AdminError(res.status, msg)
+    throw new AdminError(res.status, msg, body)
   }
   // Some actions answer with an empty 200/204 body.
   const text = await res.text()
@@ -203,7 +359,11 @@ export const admin = {
   ops: {
     overview: () => call<OpsOverviewDto>('GET', '/api/admin/ops/overview'),
     collectors: () => call<CollectorStatusDto[]>('GET', '/api/admin/ops/collectors'),
-    processing: () => call<ProcessingReportDto>('GET', '/api/admin/ops/processing'),
+    workers: () => call<WorkerInstanceDto[]>('GET', '/api/admin/ops/workers'),
+    containers: () => call<ContainersDto>('GET', '/api/admin/ops/containers'),
+    containerAction: (id: string, verb: 'restart' | 'stop' | 'start') => call<ContainerActionResultDto>('POST', `/api/admin/ops/containers/${encodeURIComponent(id)}/${verb}`, {}),
+    scale: (replicas: number) => call<ScaleResultDto>('POST', '/api/admin/ops/processors/scale', { replicas }),
+    pipeline: (hours: 24 | 168 | 720) => call<PipelineReportDto>('GET', `/api/admin/ops/pipeline?hours=${hours}`),
     db: () => call<DbReportDto>('GET', '/api/admin/ops/db'),
     logFiles: () => call<LogFileDto[]>('GET', '/api/admin/logs/files'),
     logTail: (file: string, lines: number, filter: string, level: string) => {

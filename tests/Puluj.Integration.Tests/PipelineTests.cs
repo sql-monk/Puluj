@@ -51,7 +51,9 @@ public sealed class PipelineTests(PipelineFixture fixture)
             Assert.Null(track.TrackGeometry); // two adjacent oblasts overlap: a line between their centres is not a route
             Assert.Equal(2, await db.TargetTrackRevisions.CountAsync(r => r.TargetTrackId == track.TargetTrackId));
             Assert.Equal(2, await db.TrackTargets.CountAsync());
-            Assert.Equal(ProcessingStatus.Processed, (await db.RawMessages.FindAsync(first.RawMessageId))!.ProcessingStatus);
+            var processed = (await db.RawMessages.FindAsync(first.RawMessageId))!;
+            Assert.Equal(ProcessingStatus.Processed, processed.ProcessingStatus);
+            Assert.NotNull(processed.ProcessingMs); // the wall time of the successful run is kept for the pipeline report
 
             // Replay: before the second message only the first revision exists.
             var replayAt = t0.AddMinutes(10);

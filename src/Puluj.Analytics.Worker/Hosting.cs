@@ -1,8 +1,12 @@
+using System.Diagnostics;
+using System.Reflection;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Puluj.Analytics;
 using Puluj.Analytics.Analysis;
 using Puluj.Analytics.Persistence;
+using Puluj.Contracts;
 
 namespace Puluj.Analytics.Worker;
 
@@ -71,24 +75,36 @@ public sealed class AnalysisLoop(AnalysisRunner runner, IOptions<AnalyticsOption
 }
 
 /// <summary>
-/// Writes `Runtime:Worker:{Name}:Heartbeat` into `app_settings` every 30 s — the same key family the Worker instances
-/// use, so the admin panel lists this service next to them without knowing anything about it. Removed on a clean stop.
+/// Writes `Runtime:Worker:{Name}:Heartbeat` and `Runtime:Worker:{Name}:Status` (a WorkerStatusDto without the
+/// processing part: build, uptime, process figures) into `app_settings` every 10 s — the same key family the Worker
+/// instances use, so the admin panel lists this service next to them without knowing anything about it. Both keys are
+/// removed on a clean stop.
 /// </summary>
 public sealed class AnalyticsHeartbeat(IDbContextFactory<AnalyticsDbContext> factory, IOptions<AnalyticsOptions> options, TimeProvider clock, ILogger<AnalyticsHeartbeat> logger) : BackgroundService
 {
-    private string Key => $"Runtime:Worker:{options.Value.Name}:Heartbeat";
+    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    private readonly string _version = BuildVersion(typeof(AnalyticsHeartbeat).Assembly);
+    private readonly DateTimeOffset _builtAt = BuiltAt(typeof(AnalyticsHeartbeat).Assembly);
+    private readonly DateTimeOffset _startedAt = StartedAt();
+    private TimeSpan _lastCpu = TimeSpan.Zero;
+    private DateTimeOffset _lastCpuAt = DateTimeOffset.MinValue;
+
+    private string HeartbeatKey => $"Runtime:Worker:{options.Value.Name}:Heartbeat";
+    private string StatusKey => $"Runtime:Worker:{options.Value.Name}:Status";
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(30));
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(10));
         do
         {
             try
             {
                 await using var db = await factory.CreateDbContextAsync(ct);
                 var now = clock.GetUtcNow();
+                var status = JsonSerializer.Serialize(Status(now), Json);
                 await db.Database.ExecuteSqlAsync($"""
-                    INSERT INTO app_settings (key, value, is_secret, updated_at) VALUES ({Key}, {now.ToString("O")}, false, {now})
+                    INSERT INTO app_settings (key, value, is_secret, updated_at)
+                    VALUES ({HeartbeatKey}, {now.ToString("O")}, false, {now}), ({StatusKey}, {status}, false, {now})
                     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at
                     """, ct);
             }
@@ -106,11 +122,65 @@ public sealed class AnalyticsHeartbeat(IDbContextFactory<AnalyticsDbContext> fac
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             await using var db = await factory.CreateDbContextAsync(cts.Token);
-            await db.Database.ExecuteSqlAsync($"DELETE FROM app_settings WHERE key = {Key}", cts.Token);
+            await db.Database.ExecuteSqlAsync($"DELETE FROM app_settings WHERE key IN ({HeartbeatKey}, {StatusKey})", cts.Token);
         }
         catch (Exception ex)
         {
             logger.LogDebug(ex, "Heartbeat removal failed");
         }
+    }
+
+    private WorkerStatusDto Status(DateTimeOffset now)
+    {
+        using var process = Process.GetCurrentProcess();
+        return new WorkerStatusDto(
+            options.Value.Name,
+            Environment.MachineName,
+            ["analytics"],
+            _version,
+            _builtAt,
+            _startedAt,
+            now,
+            Environment.ProcessId,
+            process.WorkingSet64,
+            CpuPercent(process),
+            process.Threads.Count,
+            Processing: null,
+            Llm: null,
+            Paused: null);
+    }
+
+    /// <summary>Processor time used since the previous call over the wall time that passed, per core, in percent.</summary>
+    private double CpuPercent(Process process)
+    {
+        var cpu = process.TotalProcessorTime;
+        var at = DateTimeOffset.UtcNow;
+        var wall = (at - _lastCpuAt).TotalMilliseconds * Environment.ProcessorCount;
+        var percent = _lastCpuAt == DateTimeOffset.MinValue || wall <= 0 ? 0 : Math.Round(100.0 * (cpu - _lastCpu).TotalMilliseconds / wall, 1);
+        _lastCpu = cpu;
+        _lastCpuAt = at;
+        return Math.Clamp(percent, 0, 100);
+    }
+
+    private static DateTimeOffset StartedAt()
+    {
+        using var process = Process.GetCurrentProcess();
+        return process.StartTime.ToUniversalTime();
+    }
+
+    /// <summary>AssemblyInformationalVersion with the source revision cut to 12 characters ("1.0.0+1a2b3c4d5e6f").</summary>
+    private static string BuildVersion(Assembly assembly)
+    {
+        var version = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+                      ?? assembly.GetName().Version?.ToString() ?? "unknown";
+        var plus = version.IndexOf('+');
+        return plus >= 0 && version.Length - plus - 1 > 12 ? version[..(plus + 13)] : version;
+    }
+
+    /// <summary>When the main assembly was written: tells replicas of different builds apart when the version is the same.</summary>
+    private static DateTimeOffset BuiltAt(Assembly assembly)
+    {
+        var path = string.IsNullOrEmpty(assembly.Location) ? Environment.ProcessPath : assembly.Location;
+        return string.IsNullOrEmpty(path) || !File.Exists(path) ? DateTimeOffset.MinValue : new DateTimeOffset(File.GetLastWriteTimeUtc(path), TimeSpan.Zero);
     }
 }

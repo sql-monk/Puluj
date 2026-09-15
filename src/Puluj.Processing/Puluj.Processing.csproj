@@ -1,5 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <ProjectReference Include="..\Puluj.Contracts\Puluj.Contracts.csproj" />
     <ProjectReference Include="..\Puluj.Domain\Puluj.Domain.csproj" />
     <ProjectReference Include="..\Puluj.Infrastructure\Puluj.Infrastructure.csproj" />
   </ItemGroup>

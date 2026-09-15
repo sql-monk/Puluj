@@ -4,20 +4,25 @@ import { Badge, Field, findSetting, Section, Toggle, type Draft } from '../compo
 import SourceRatingPanel from '../components/settings/SourceRatingPanel'
 import AnalyticsPanel from '../components/analytics/AnalyticsPanel'
 import SourcesEditor from '../components/settings/SourcesEditor'
-import { CollectorsPanel, DbPanel, LogsPanel, OverviewPanel, ProcessingPanel } from './OpsPanels'
+import { CollectorsPanel, DbPanel, LogsPanel, OverviewPanel } from './OpsPanels'
+import { WorkersPanel } from './WorkersPanel'
+import { PipelinePanel } from './PipelinePanel'
 
 /** Where the public map lives (another service, another port); overridable at build time. */
 const MAP_URL: string = (import.meta.env.VITE_MAP_URL as string | undefined) ?? `${window.location.protocol}//${window.location.hostname}:5257/`
 
-type SectionId = 'overview' | 'collectors' | 'processing' | 'db' | 'logs' | 'analytics' | 'sources' | 'rating' | 'alerts' | 'telegram' | 'llm' | 'system'
+type SectionId = 'overview' | 'workers' | 'collectors' | 'pipeline' | 'db' | 'logs' | 'analytics' | 'analytics-service' | 'sources' | 'rating' | 'alerts' | 'telegram' | 'llm' | 'system'
 
 const NAV: { id: SectionId; label: string; group: string }[] = [
   { id: 'overview', label: 'Стан', group: 'Моніторинг' },
+  { id: 'workers', label: 'Воркери', group: 'Моніторинг' },
   { id: 'collectors', label: 'Колектори', group: 'Моніторинг' },
-  { id: 'processing', label: 'Обробка', group: 'Моніторинг' },
+  { id: 'pipeline', label: 'Конвеєр', group: 'Моніторинг' },
   { id: 'db', label: 'База даних', group: 'Моніторинг' },
   { id: 'logs', label: 'Логи', group: 'Моніторинг' },
   { id: 'analytics', label: 'Хто кого копіює', group: 'Аналітика' },
+  // Same component as `analytics`: it reads the hash itself and opens its "Сервіс" tab on #/analytics-service.
+  { id: 'analytics-service', label: 'Стан сервісу', group: 'Аналітика' },
   { id: 'sources', label: 'Джерела', group: 'Налаштування' },
   { id: 'rating', label: 'Рейтинг джерел', group: 'Налаштування' },
   { id: 'alerts', label: 'alerts.in.ua', group: 'Налаштування' },
@@ -32,8 +37,8 @@ function sectionFromHash(): SectionId {
 }
 
 /**
- * The admin panel (its own service, port 5258): monitoring of every component (status, collectors, processing,
- * database, logs) and all the settings. Values go to the app_settings table through /api/admin/*; the Worker
+ * The admin panel (its own service, port 5258): monitoring of every component (status, workers and containers,
+ * collectors, pipeline, database, logs) and all the settings. Values go to the app_settings table through /api/admin/*; the Worker
  * picks them up within seconds and restarts its collectors — no process restart, no .env editing.
  */
 export default function AdminApp() {
@@ -146,11 +151,12 @@ export default function AdminApp() {
             <div className="flex-1 space-y-4 overflow-y-auto p-4">
               <div className="mx-auto max-w-5xl space-y-4">
                 {section === 'overview' && <OverviewPanel />}
+                {section === 'workers' && <WorkersPanel />}
                 {section === 'collectors' && <CollectorsPanel />}
-                {section === 'processing' && <ProcessingPanel />}
+                {section === 'pipeline' && <PipelinePanel />}
                 {section === 'db' && <DbPanel />}
                 {section === 'logs' && <LogsPanel />}
-                {section === 'analytics' && <AnalyticsPanel />}
+                {(section === 'analytics' || section === 'analytics-service') && <AnalyticsPanel />}
                 {section === 'sources' && <SourcesEditor sources={sources} reload={load} notify={setMessage} />}
                 {section === 'rating' && <SourceRatingPanel />}
                 {section === 'alerts' && <AlertsSection {...props} />}

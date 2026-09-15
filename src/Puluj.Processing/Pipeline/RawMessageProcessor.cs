@@ -47,6 +47,7 @@ public sealed class RawMessageProcessor(
     IOptions<ProcessingOptions> options,
     ProcessorIdentity identity,
     PulujMetrics metrics,
+    ProcessingStats stats,
     TimeProvider clock,
     ILogger<RawMessageProcessor> logger)
 {
@@ -96,6 +97,7 @@ public sealed class RawMessageProcessor(
                 await db.SaveChangesAsync(ct);
                 await tx.CommitAsync(ct);
                 metrics.RawProcessed(identity.Name, "skipped");
+                stats.Outcome("skipped", raw.RawMessageId);
                 return 0;
             }
 
@@ -111,15 +113,21 @@ public sealed class RawMessageProcessor(
             {
                 await sink.OnTargetsAsync(db, targets, source, events, ct);
             }
+            raw.ProcessingMs = (int)Math.Min(sw.ElapsedMilliseconds, int.MaxValue); // up to here: without the commit and NOTIFY
             await db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
-            var storeMs = sw.ElapsedMilliseconds - lockedMs;
+            var totalMs = sw.ElapsedMilliseconds;
+            var storeMs = totalMs - lockedMs;
             _transientRetries.TryRemove(raw.RawMessageId, out _);
             // Lock wait close to store time means the store lock is the ceiling: the workers spend their time queued for it.
             logger.LogDebug("RawMessage {Id}: parse {ParseMs} ms, lock wait {LockMs} ms, store + sinks {SinkMs} ms", raw.RawMessageId, parsedMs, lockedMs - parsedMs, storeMs);
             metrics.ProcessingStage("parse", parsedMs);
             metrics.ProcessingStage("lock", lockedMs - parsedMs);
             metrics.ProcessingStage("store", storeMs);
+            stats.Record("parse", parsedMs);
+            stats.Record("lock", lockedMs - parsedMs);
+            stats.Record("store", storeMs);
+            stats.Record("total", totalMs);
             foreach (var evt in events)
             {
                 await notifier.PublishAsync(evt, ct);
@@ -135,6 +143,7 @@ public sealed class RawMessageProcessor(
                 metrics.TargetCreated(source.Code, o.IdentificationMethod.ToString());
             }
             metrics.RawProcessed(identity.Name, "processed");
+            stats.Outcome("processed", raw.RawMessageId);
             logger.LogInformation("RawMessage {Id} ({Source}): {Count} target(s) in {Ms} ms", raw.RawMessageId, source.Code, targets.Count, sw.ElapsedMilliseconds);
             return targets.Count;
         }
@@ -260,7 +269,9 @@ public sealed class RawMessageProcessor(
             });
             await db.SaveChangesAsync(CancellationToken.None);
             await tx.CommitAsync(CancellationToken.None);
-            metrics.RawProcessed(identity.Name, transient is not null ? "retried_transient" : failed ? "failed" : "retried");
+            var outcome = transient is not null ? "retried_transient" : failed ? "failed" : "retried";
+            metrics.RawProcessed(identity.Name, outcome);
+            stats.Outcome(outcome, raw.RawMessageId);
         }
         catch (Exception inner)
         {

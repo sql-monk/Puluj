@@ -301,33 +301,20 @@ export interface TimelineBucketDto {
   alerts: number
 }
 
-// Statistics page (GET /api/stats): every chart of one period in one payload.
+// Statistics page (GET /api/stats/{targets|alerts|sources|recognition}?from&to): one payload per tab for one period.
+// Per-bucket arrays are aligned with `period.bucketStarts`.
 export type StatsBucketUnit = 'hour' | 'day' | 'week'
 
-export interface StatsTotalsDto {
-  targets: number
-  tracks: number
-  objectsDeclared: number
-  alerts: number
-  alertHours: number
-  messages: number
-  messagesProcessed: number
-  messagesWithTargets: number
-  activeSources: number
+export interface StatsPeriodDto {
+  from: string
+  to: string
+  bucket: StatsBucketUnit
+  bucketStarts: string[]
 }
 
 export interface StatsCategoryDto {
   code: string
   name: string
-}
-
-/** One time bucket; `targets` / `tracks` are counts per category in the order of `StatsDto.categories`. */
-export interface StatsBucketDto {
-  at: string
-  targets: number[]
-  tracks: number[]
-  alerts: number
-  alertHours: number
 }
 
 export interface StatsClassDto {
@@ -360,11 +347,52 @@ export interface StatsSliceDto {
   count: number
 }
 
+/** "What flew": facts and tracks per bucket and category, classes, regions, routes, hour × weekday. */
+export interface StatsTargetsDto {
+  period: StatsPeriodDto
+  targets: number
+  tracks: number
+  objectsDeclared: number
+  categories: StatsCategoryDto[]
+  /** One row per bucket; inner arrays are counts per category in the order of `categories`. */
+  targetsByBucket: number[][]
+  tracksByBucket: number[][]
+  byClass: StatsClassDto[]
+  byRegion: StatsRegionDto[]
+  /** Facts whose location does not resolve to a region. */
+  unlocated: number
+  routes: StatsRouteDto[]
+  /** 7 rows (Monday first) × 24 hours, Europe/Kyiv. */
+  hourWeekday: number[][]
+}
+
 export interface StatsAlertRegionDto {
   id: number
   name: string
   count: number
   hours: number
+}
+
+export interface StatsAlertDayDto {
+  /** Kyiv calendar day, `YYYY-MM-DD`. */
+  day: string
+  count: number
+  hours: number
+}
+
+/** Region-level air-raid alerts of the period. */
+export interface StatsAlertsDto {
+  period: StatsPeriodDto
+  alerts: number
+  alertHours: number
+  openAtEnd: number
+  declaredByBucket: number[]
+  hoursByBucket: number[]
+  byRegion: StatsAlertRegionDto[]
+  durations: StatsSliceDto[]
+  /** 24 entries, Europe/Kyiv. */
+  declaredByHour: number[]
+  topDays: StatsAlertDayDto[]
 }
 
 export interface StatsSourceDto {
@@ -376,28 +404,29 @@ export interface StatsSourceDto {
   withTargets: number
   targets: number
   medianLagSeconds?: number
-  /** Messages per bucket, aligned with `StatsDto.bucketStarts`. */
+  /** Messages per bucket. */
   series: number[]
 }
 
-export interface StatsDto {
-  from: string
-  to: string
-  bucket: StatsBucketUnit
-  bucketStarts: string[]
-  totals: StatsTotalsDto
-  categories: StatsCategoryDto[]
-  timeline: StatsBucketDto[]
-  byClass: StatsClassDto[]
-  byRegion: StatsRegionDto[]
-  routes: StatsRouteDto[]
-  /** 7 rows (Monday first) × 24 hours, Europe/Kyiv. */
-  hourWeekday: number[][]
+export interface StatsSourcesDto {
+  period: StatsPeriodDto
+  messages: number
+  processed: number
+  withTargets: number
+  targets: number
+  sources: StatsSourceDto[]
+}
+
+/** How the pipeline read the period: distributions of the facts, processed messages with / without a fact per bucket. */
+export interface StatsRecognitionDto {
+  period: StatsPeriodDto
+  targets: number
+  processed: number
+  withTargets: number
   eventTypes: StatsSliceDto[]
   methods: StatsSliceDto[]
   confidence: StatsSliceDto[]
   locationKinds: StatsSliceDto[]
-  alertsByRegion: StatsAlertRegionDto[]
-  alertDurations: StatsSliceDto[]
-  sources: StatsSourceDto[]
+  processedByBucket: number[]
+  withTargetsByBucket: number[]
 }

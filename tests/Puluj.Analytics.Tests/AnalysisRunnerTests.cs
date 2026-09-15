@@ -172,9 +172,18 @@ public sealed class AnalysisRunnerTests : IAsyncLifetime
         Assert.Equal(1, b.ForwardsInternal);
         var pair = report.Pairs.Single(p => p.Count > 0);
         Assert.Equal((_b, _a, 3, 6, 1, 1), (pair.CopierId, pair.OriginalId, pair.Count, pair.CountAll, pair.Verbatim, pair.Forwards));
-        var recent = await Reports.RecentAsync(10, _b, CancellationToken.None);
+        var recent = await Reports.RecentAsync(10, _b, null, false, CancellationToken.None);
         Assert.Equal(6, recent.Count);
         Assert.All(recent, r => Assert.False(string.IsNullOrEmpty(r.CopyText)));
+        Assert.Equal(3, (await Reports.RecentAsync(10, null, null, true, CancellationToken.None)).Count);
+        Assert.All(await Reports.RecentAsync(10, null, CopyKind.Forward, false, CancellationToken.None), r => Assert.Equal("forward", r.Kind));
+
+        var details = await Reports.PairAsync(_b, _a, 14, CancellationToken.None);
+        Assert.NotNull(details);
+        Assert.Equal((3, 6, 1, 1), (details.Count, details.CountAll, details.Verbatim, details.Forwards));
+        Assert.Equal(3, details.Delays.Sum(d => d.Count));
+        Assert.Equal(6, details.Recent.Count);
+        Assert.Equal(pair.MedianDelaySeconds, details.MedianDelaySeconds);
 
         // Reset and rebuild from scratch: the same picture.
         await Reports.ResetAsync(CancellationToken.None);

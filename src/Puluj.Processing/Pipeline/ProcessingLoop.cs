@@ -29,6 +29,7 @@ public sealed class ProcessingLoop(
     ReprocessService reprocess,
     IOptions<ProcessingOptions> options,
     PulujMetrics metrics,
+    ProcessingStats stats,
     ILogger<ProcessingLoop> logger) : BackgroundService
 {
     private volatile string? _paused;
@@ -97,7 +98,15 @@ public sealed class ProcessingLoop(
                             continue;
                         }
                     }
-                    await processor.ProcessAsync(id.Value, ct);
+                    stats.Claimed(id.Value);
+                    try
+                    {
+                        await processor.ProcessAsync(id.Value, ct);
+                    }
+                    finally
+                    {
+                        stats.Released(id.Value);
+                    }
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {

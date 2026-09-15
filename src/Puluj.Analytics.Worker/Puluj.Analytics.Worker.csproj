@@ -6,6 +6,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Puluj.Analytics\Puluj.Analytics.csproj" />
+    <ProjectReference Include="..\Puluj.Contracts\Puluj.Contracts.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Serilog.AspNetCore" />
