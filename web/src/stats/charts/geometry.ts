@@ -102,6 +102,21 @@ export function columnPath(x: number, y: number, w: number, h: number, radius: n
   return `M${x},${y + h}v${-(h - rr)}a${rr},${rr} 0 0 1 ${rr},${-rr}h${w - 2 * rr}a${rr},${rr} 0 0 1 ${rr},${rr}v${h - rr}Z`
 }
 
+/**
+ * Where a horizontal bar's label goes: after the bar end when it fits, inside the bar when the bar is long enough,
+ * and if neither — dropping the trailing parts (share, note) one by one — the first part alone at the plot's right
+ * edge over the bar. Every row keeps at least its value on screen.
+ */
+export function placeLabel(parts: string[], w: number, plotW: number): { text: string; where: 'outside' | 'inside' | 'edge' } {
+  for (let n = parts.length; n >= 1; n--) {
+    const text = parts.slice(0, n).join(' · ')
+    const tw = textWidth(text, 6.2)
+    if (w + 6 + tw < plotW) return { text, where: 'outside' }
+    if (tw + 12 < w) return { text, where: 'inside' }
+  }
+  return { text: parts[0] ?? '', where: 'edge' }
+}
+
 /** A horizontal bar: square at the baseline (left), the data end rounded. */
 export function barPath(x: number, y: number, w: number, h: number, radius: number): string {
   const rr = Math.min(radius, h / 2, w)

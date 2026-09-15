@@ -8,8 +8,11 @@ import { CollectorsPanel, DbPanel, LogsPanel, OverviewPanel } from './OpsPanels'
 import { WorkersPanel } from './WorkersPanel'
 import { PipelinePanel } from './PipelinePanel'
 
-/** Where the public map lives (another service, another port); overridable at build time. */
-const MAP_URL: string = (import.meta.env.VITE_MAP_URL as string | undefined) ?? `${window.location.protocol}//${window.location.hostname}:5257/`
+/**
+ * Where the public map lives (another service, one port below this one — 5257/5258 in dev, 8080/8081 in Docker):
+ * overridable at build time, otherwise derived from the admin panel's own origin.
+ */
+const MAP_URL: string = (import.meta.env.VITE_MAP_URL as string | undefined) ?? `${window.location.protocol}//${window.location.hostname}:${Number(window.location.port) - 1}/`
 
 type SectionId = 'overview' | 'workers' | 'collectors' | 'pipeline' | 'db' | 'logs' | 'analytics' | 'analytics-service' | 'sources' | 'rating' | 'alerts' | 'telegram' | 'llm' | 'system'
 

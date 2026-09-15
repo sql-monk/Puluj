@@ -97,12 +97,20 @@ public sealed class DockerService(IOptions<DockerOptions> options, ILogger<Docke
         {
             return new ActionOutcome(400, new ContainerActionResultDto(false, $"невідома дія '{verb}'", ""));
         }
-        var list = await ListAsync(ct, fresh: true);
-        if (!list.Available)
+        // Membership and protection are checked against a fresh `docker ps` (no `stats`: that sample takes two seconds
+        // and says nothing about which project a container belongs to).
+        if (await UnavailableAsync(ct) is { } reason)
         {
-            return new ActionOutcome(503, new ContainerActionResultDto(false, list.Unavailable ?? "недоступно", ""));
+            return new ActionOutcome(503, new ContainerActionResultDto(false, reason, ""));
         }
-        var container = list.Containers.FirstOrDefault(c => c.Id.Equals(containerId, StringComparison.OrdinalIgnoreCase) || c.Name == containerId);
+        var ps = await RunAsync(DockerCommands.Ps(Options.Project), ct);
+        if (!ps.Ok)
+        {
+            _probe = null;
+            return new ActionOutcome(502, new ContainerActionResultDto(false, $"docker ps: {FirstLine(ps.Error ?? ps.Stderr)}", Truncate(ps.Stderr)));
+        }
+        var containers = DockerContainers.Build(DockerJson.ParseLines(ps.Stdout, DockerJson.ParsePs), [], Protected);
+        var container = containers.FirstOrDefault(c => c.Id.Equals(containerId, StringComparison.OrdinalIgnoreCase) || c.Name == containerId);
         if (container is null)
         {
             return new ActionOutcome(404, new ContainerActionResultDto(false, $"контейнер '{containerId}' не належить проєкту {Options.Project}", ""));

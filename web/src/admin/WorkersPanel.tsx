@@ -55,6 +55,11 @@ export function WorkersPanel() {
   )
 }
 
+/** The reporter writes DateTimeOffset.MinValue when it cannot stat its own assembly: not a build time worth showing. */
+function knownBuild(iso: string): boolean {
+  return new Date(iso).getFullYear() > 2000
+}
+
 function containerOf(w: WorkerInstanceDto, containers: ContainersDto | null): ContainerDto | undefined {
   if (!w.containerId || !containers) return undefined
   return containers.containers.find((c) => c.id === w.containerId)
@@ -163,9 +168,9 @@ function InstanceCard({ w, container, docker, onAct }: { w: WorkerInstanceDto; c
         <Badge ok={health.ok} text={health.text} />
       </div>
       <div className="flex flex-wrap gap-x-3 gap-y-1 text-slate-600 dark:text-slate-300">
-        <span title={s ? `зібрано ${fmtTime(s.builtAt)}` : undefined}>
+        <span title={s && knownBuild(s.builtAt) ? `зібрано ${fmtTime(s.builtAt)}` : undefined}>
           версія <b className="font-mono">{s?.version ?? '—'}</b>
-          {s && <span className="text-slate-400"> · {fmtTime(s.builtAt)}</span>}
+          {s && knownBuild(s.builtAt) && <span className="text-slate-400"> · {fmtTime(s.builtAt)}</span>}
         </span>
         <span>
           uptime <b className="font-mono">{s ? fmtDuration(s.startedAt) : '—'}</b>

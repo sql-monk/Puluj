@@ -1,5 +1,6 @@
+import { SURFACE } from '../palette'
 import { Tooltip } from './ChartCard'
-import { barPath, textWidth } from './geometry'
+import { barPath, placeLabel } from './geometry'
 import { useTooltip, useWidth, type TipLine } from './hooks'
 
 export interface BarRow {
@@ -8,6 +9,8 @@ export interface BarRow {
   value: number
   /** Extra tooltip lines. */
   details?: TipLine[]
+  /** A short annotation written after the value at the bar end ("14 тривог"); the tooltip carries the rest. */
+  note?: string
   /** A category colour drawn as a thin swatch before the label (identity without recolouring the bar). */
   swatch?: string
   /** The bar's own colour (an "other" row in grey); the chart's colour otherwise. */
@@ -56,10 +59,7 @@ export default function HBars({
           {rows.map((x, i) => {
             const w = max > 0 ? (plotW * x.value) / max : 0
             const yTop = 2 + i * rowH
-            const text = showShare && x.value > 0 ? `${format(x.value)} · ${share(x.value)}` : format(x.value)
-            const tw = textWidth(text, 6.2)
-            const outside = w + 6 + tw < plotW
-            const inside = !outside && tw + 12 < w
+            const label = placeLabel([format(x.value), showShare && x.value > 0 ? share(x.value) : '', x.note ?? ''].filter(Boolean), w, plotW)
             const lines: TipLine[] = [{ value: format(x.value), label: showShare ? `${share(x.value)} від усього` : '' }, ...(x.details ?? [])]
             return (
               <g key={x.key}>
@@ -70,14 +70,19 @@ export default function HBars({
                 </text>
                 <line x1={labelWidth} x2={labelWidth} y1={yTop} y2={yTop + rowH} stroke="currentColor" strokeOpacity={0.3} />
                 <path d={barPath(labelWidth, yTop + (rowH - barH) / 2, w, barH, 4)} fill={x.color ?? color} />
-                {outside && (
+                {label.where === 'outside' && (
                   <text x={labelWidth + w + 5} y={yTop + rowH / 2 + 4} fill="currentColor" fillOpacity={0.75} className="tabular-nums">
-                    {text}
+                    {label.text}
                   </text>
                 )}
-                {inside && (
+                {label.where === 'inside' && (
                   <text x={labelWidth + w - 5} y={yTop + rowH / 2 + 4} textAnchor="end" fill="#ffffff" className="pointer-events-none tabular-nums">
-                    {text}
+                    {label.text}
+                  </text>
+                )}
+                {label.where === 'edge' && (
+                  <text x={labelWidth + plotW} y={yTop + rowH / 2 + 4} textAnchor="end" fill="currentColor" fillOpacity={0.85} stroke={SURFACE} strokeWidth={3} paintOrder="stroke" className="pointer-events-none tabular-nums">
+                    {label.text}
                   </text>
                 )}
               </g>

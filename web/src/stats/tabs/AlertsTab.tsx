@@ -6,7 +6,7 @@ import Columns from '../charts/Columns'
 import HBars from '../charts/HBars'
 import Histogram from '../charts/Histogram'
 import { ACCENT, ACCENT_2 } from '../palette'
-import { HOURS, bucketLabel, bucketTitle, compact, dayTitle, hoursText, num, perBucket, type Period } from '../period'
+import { HOURS, bucketLabel, bucketTitle, compact, dayTitle, hoursText, num, perBucket, plural, type Period } from '../period'
 import { SectionShell, useSection } from '../section'
 
 /** Region-level air-raid alerts: hours under alert over time, per region, durations, hour of day, the heaviest days. */
@@ -55,8 +55,24 @@ function Alerts({ data }: { data: StatsAlertsDto }) {
       </ChartCard>
 
       <div className="grid gap-3 lg:grid-cols-2">
-        <ChartCard title="По областях" subtitle="годин під тривогою за період; топ-15" empty={data.byRegion.length === 0} table={{ head: ['Область', 'Годин', 'Тривог'], rows: data.byRegion.map((a) => [a.name, Math.round(a.hours * 10) / 10, a.count]) }}>
-          <HBars rows={data.byRegion.slice(0, 15).map((a) => ({ key: String(a.id), label: a.name, value: a.hours, details: [{ value: num(a.count), label: 'тривог' }, { value: hoursText(a.count > 0 ? a.hours / a.count : 0), label: 'у середньому' }] }))} color={ACCENT} format={hoursText} total={data.alertHours} labelWidth={170} ariaLabel="години під тривогою за областями" />
+        <ChartCard title="По областях" subtitle="годин під тривогою за період і скільки тривог оголошено; топ-15" empty={data.byRegion.length === 0} table={{ head: ['Область', 'Годин', 'Тривог'], rows: data.byRegion.map((a) => [a.name, Math.round(a.hours * 10) / 10, a.count]) }}>
+          <HBars
+            rows={data.byRegion.slice(0, 15).map((a) => ({
+              key: String(a.id),
+              label: a.name,
+              value: a.hours,
+              note: `${num(a.count)} ${plural(a.count, 'тривога', 'тривоги', 'тривог')}`,
+              details: [
+                { value: `${Math.round((a.hours / Math.max(1, data.alertHours)) * 100)}%`, label: 'від усіх годин' },
+                { value: hoursText(a.count > 0 ? a.hours / a.count : 0), label: 'у середньому' },
+              ],
+            }))}
+            color={ACCENT}
+            format={hoursText}
+            showShare={false}
+            labelWidth={170}
+            ariaLabel="години під тривогою за областями"
+          />
         </ChartCard>
         <ChartCard title="Тривалість" subtitle="завершені тривоги по областях" empty={data.durations.every((d) => d.count === 0)} table={{ head: ['Тривалість', 'Тривог'], rows: data.durations.map((d) => [d.label, d.count]) }}>
           <Histogram bins={data.durations} valueLabel="тривог" />

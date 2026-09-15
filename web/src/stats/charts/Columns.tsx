@@ -59,14 +59,14 @@ export default function Columns({
   const { totals, layers } = stackLayers(series.map((s) => s.values))
   const max = Math.max(0, ...totals)
   const ticks = niceTicks(max)
-  const secH = secondary ? 56 : 0
+  const secH = secondary ? 64 : 0
   const f = frame(width, height - secH, ticks.map(format), { padB: secondary ? 4 : 24, padT: showValues ? 16 : 8 })
   const { slot, bar } = slots(n, f.plotW)
   const y = scale(ticks[ticks.length - 1], f.padT, f.plotH, true)
   const every = labelEvery(n, Math.max(2, Math.floor(f.plotW / 56)))
   const xLabelY = height - 8
-  // Secondary panel: its own [0, max] under the main plot, 24 px above the x labels.
-  const sec = secondary ? { top: f.padT + f.plotH + 12, h: secH - 12 - 24 } : null
+  // Secondary panel: its own [0, max] under the main plot — 18 px below it so the two axis labels do not touch — and 24 px above the x labels.
+  const sec = secondary ? { top: f.padT + f.plotH + 18, h: secH - 18 - 24 } : null
   const secMax = secondary ? Math.max(0, ...secondary.values) : 0
   const secY = sec ? scale(secMax, sec.top, sec.h, true) : () => 0
   const secFormat = secondary?.format ?? fmt

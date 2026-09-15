@@ -1,4 +1,5 @@
 import { useStore } from '../store/useStore'
+import { num, plural } from './period'
 
 /**
  * "Now" in one line, from what the store already holds for the map (tracks, alerts, the feed of recent reports) —
@@ -15,10 +16,9 @@ export default function LiveLine() {
   const places = Object.keys(alerts).length
   const hourAgo = now.getTime() - 3600_000
   const facts = targets.filter((o) => o.eventType === 'TargetObserved' && !o.duplicateOfTargetId && new Date(o.observedAt).getTime() >= hourAgo).length
-  const n = (v: number) => v.toLocaleString('uk-UA')
   return (
     <div className="text-xs text-slate-600 dark:text-slate-300" aria-live="polite">
-      <span className="font-medium">{mode === 'history' ? 'на обраний момент' : 'зараз'}:</span> {n(active)} активних цілей · {n(places)} місць під тривогою · {n(facts)} фактів за останню годину
+      <span className="font-medium">{mode === 'history' ? 'на обраний момент' : 'зараз'}:</span> {num(active)} {plural(active, 'активна ціль', 'активні цілі', 'активних цілей')} · {num(places)} {plural(places, 'місце', 'місця', 'місць')} під тривогою · {num(facts)} {plural(facts, 'факт', 'факти', 'фактів')} за останню годину
       {connection !== 'connected' && mode === 'live' && <span className="text-slate-400"> · без живого з’єднання</span>}
     </div>
   )

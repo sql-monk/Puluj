@@ -32,7 +32,8 @@ export default function ChartCard({
 }) {
   const [showTable, setShowTable] = useState(false)
   return (
-    <section className={`flex flex-col gap-2 rounded-xl bg-white p-3 shadow-sm dark:bg-slate-900 ${className ?? ''}`} aria-label={title}>
+    // min-w-0: as a grid item the card must shrink below its SVG's current width, or the chart never re-measures narrower.
+    <section className={`flex min-w-0 flex-col gap-2 rounded-xl bg-white p-3 shadow-sm dark:bg-slate-900 ${className ?? ''}`} aria-label={title}>
       <header className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h3 className="text-sm font-semibold">{title}</h3>
         {subtitle && <span className="text-xs text-slate-500 dark:text-slate-400">{subtitle}</span>}

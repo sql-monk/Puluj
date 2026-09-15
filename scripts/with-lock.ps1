@@ -14,8 +14,17 @@ try {
     catch [System.Threading.AbandonedMutexException] { $acquired = $true } # the previous holder died: the lock is ours
     if (-not $acquired) { Write-Error "with-lock: could not acquire Global\Puluj.Build within 20 minutes"; exit 75 }
     $exe = $Command[0]
-    $args = if ($Command.Length -gt 1) { $Command[1..($Command.Length - 1)] } else { @() }
-    & $exe @args
+    # npm / npx / dotnet-tools ship an extensionless POSIX script next to the .cmd; PowerShell may pick the former and
+    # spawn an empty cmd.exe that exits 0 without running anything. Prefer the .cmd shim on Windows.
+    if ($IsWindows -or $env:OS -eq "Windows_NT") {
+        foreach ($ext in @(".cmd", ".exe", ".bat")) {
+            $shim = Get-Command "$exe$ext" -ErrorAction SilentlyContinue
+            if ($shim) { $exe = $shim.Source; break }
+        }
+    }
+    $rest = if ($Command.Length -gt 1) { $Command[1..($Command.Length - 1)] } else { @() }
+    & $exe @rest
+    if ($null -eq $LASTEXITCODE) { exit 0 }
     exit $LASTEXITCODE
 } finally {
     if ($acquired) { $mutex.ReleaseMutex() }

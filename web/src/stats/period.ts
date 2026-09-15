@@ -138,16 +138,22 @@ export function compact(n: number): string {
   return n.toLocaleString('uk-UA')
 }
 
+/**
+ * Hours as people read them: minutes below an hour, hours with one decimal below two days, days and whole hours
+ * from there ("2 д", "2 д 2 год"). The value is rounded to the shown precision *before* the branch is chosen, so what
+ * would print as "48 год" prints as "2 д" instead — one figure never reads as two different magnitudes.
+ */
 export function hoursText(h: number): string {
   if (h < 1) return `${Math.round(h * 60)} хв`
-  if (h < 48) return `${h.toLocaleString('uk-UA', { maximumFractionDigits: 1 })} год`
-  let days = Math.floor(h / 24)
-  let rest = Math.round(h % 24)
+  const tenths = Math.round(h * 10) / 10
+  if (tenths < 48) return `${tenths.toLocaleString('uk-UA', { maximumFractionDigits: 1 })} год`
+  let days = Math.floor(tenths / 24)
+  let rest = Math.round(tenths % 24)
   if (rest === 24) {
     days += 1
     rest = 0
   }
-  return `${days} д ${rest} год`
+  return rest === 0 ? `${days} д` : `${days} д ${rest} год`
 }
 
 export function lagText(s?: number): string {
@@ -161,4 +167,15 @@ export function pct(part: number, whole: number): string {
 
 export function num(n: number): string {
   return n.toLocaleString('uk-UA')
+}
+
+/** Ukrainian plural form of a noun for a count: 1 тривога, 2–4 тривоги, 5–20 тривог (and so on by the last digits). */
+export function plural(n: number, one: string, few: string, many: string): string {
+  const abs = Math.abs(Math.trunc(n))
+  const last2 = abs % 100
+  const last = abs % 10
+  if (last2 >= 11 && last2 <= 19) return many
+  if (last === 1) return one
+  if (last >= 2 && last <= 4) return few
+  return many
 }

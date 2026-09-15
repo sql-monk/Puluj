@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { areaPath, barPath, columnPath, foldSeries, frame, indexAt, labelEvery, linePath, niceTicks, routeMatrix, scale, slots, stackLayers, stepCursor } from './geometry'
+import { areaPath, barPath, columnPath, foldSeries, frame, indexAt, labelEvery, linePath, niceTicks, placeLabel, routeMatrix, scale, slots, stackLayers, stepCursor } from './geometry'
+
+describe('bar labels', () => {
+  it('go after a short bar, inside a long one, and shed their tail before falling back to the value at the edge', () => {
+    const parts = ['1 167', '50%', '218 тривог']
+    expect(placeLabel(parts, 40, 400)).toEqual({ text: '1 167 · 50% · 218 тривог', where: 'outside' })
+    expect(placeLabel(parts, 380, 400)).toEqual({ text: '1 167 · 50% · 218 тривог', where: 'inside' })
+    // 140 px plot, 80 px bar: the full text fits neither side, the value alone fits after the bar.
+    expect(placeLabel(parts, 80, 140)).toEqual({ text: '1 167', where: 'outside' })
+    // 48 px bar in a 90 px plot: the value (≈37 px) fits neither after the bar nor inside it — drawn at the plot's edge.
+    expect(placeLabel(['93 752', '42%'], 48, 90)).toEqual({ text: '93 752', where: 'edge' })
+    expect(placeLabel([], 10, 100)).toEqual({ text: '', where: 'edge' })
+  })
+})
 
 describe('axis ticks', () => {
   it('start at 0 and cover the maximum with few round steps', () => {

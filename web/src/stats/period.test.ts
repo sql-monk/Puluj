@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { compact, dayTitle, hoursText, lagText, parseStatsHash, pct, presetPeriod, roundedNow, statsHash } from './period'
+import { compact, dayTitle, hoursText, lagText, parseStatsHash, pct, plural, presetPeriod, roundedNow, statsHash } from './period'
 
 const NOW = new Date('2026-09-15T10:07:42Z')
 
@@ -62,8 +62,13 @@ describe('formatting', () => {
   it('prints hours as minutes, hours or days', () => {
     expect(hoursText(0.5)).toBe('30 хв')
     expect(hoursText(2.5)).toContain('год')
+    expect(hoursText(47.9)).toBe('47,9 год')
     expect(hoursText(50)).toBe('2 д 2 год')
-    expect(hoursText(47.99)).toBe('2 д 0 год')
+    // Rounded to the shown precision first: 47.99 would print as "48 год", so it goes the days way — as "2 д", not "2 д 0 год".
+    expect(hoursText(47.99)).toBe('2 д')
+    expect(hoursText(48)).toBe('2 д')
+    expect(hoursText(71.6)).toBe('3 д')
+    expect(hoursText(350.4)).toBe('14 д 14 год')
   })
 
   it('prints lag, shares and Kyiv days', () => {
@@ -73,5 +78,10 @@ describe('formatting', () => {
     expect(pct(1, 4)).toBe('25%')
     expect(pct(1, 0)).toBe('—')
     expect(dayTitle('2026-09-14')).toBe('пн 14.09.2026')
+  })
+
+  it('picks the Ukrainian plural form by the last digits', () => {
+    const f = (n: number) => plural(n, 'тривога', 'тривоги', 'тривог')
+    expect([1, 2, 5, 11, 12, 21, 22, 25, 101, 111].map(f)).toEqual(['тривога', 'тривоги', 'тривог', 'тривог', 'тривог', 'тривога', 'тривоги', 'тривог', 'тривога', 'тривог'])
   })
 })
